@@ -1,14 +1,12 @@
 {
-	"name": "oliveoilexpert/typo3-menu-controls",
+	"name": "amdeu/typo3-menu-controls",
 	"type": "typo3-cms-extension",
-	"description": "",
+	"description": "Menu Controls - Helpers for building extbase menus",
 	"license": "MIT",
-	"version": "0.1.3",
 	"require": {
 		"php": "^8.2",
-		"typo3/cms-core": "~13.4.0",
-		"typo3/cms-extbase": "~13.4.0",
-		"typo3/cms-install": "~13.4.0"
+		"typo3/cms-core": "^13.4 || ^14.3",
+		"typo3/cms-extbase": "^13.4 || ^14.3"
 	},
 	"replace": {
 		"typo3-ter/typo3-menu-controls": "self.version"

@@ -1,207 +1,257 @@
 <?php
 
+declare(strict_types=1);
+
 namespace UBOS\MenuControls\Builder;
 
 use Symfony\Component\DependencyInjection\Attribute\Autoconfigure;
 use TYPO3\CMS\Core\Page\PageRenderer;
-use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Pagination\ArrayPaginator;
 use TYPO3\CMS\Core\Pagination\SlidingWindowPagination;
-use TYPO3\CMS\Extbase\Mvc\Request;
-use TYPO3\CMS\Extbase\Mvc\Web\Routing\UriBuilder;
-
+use TYPO3\CMS\Core\Utility\GeneralUtility;
 use UBOS\MenuControls\Dto\Pagination;
 use UBOS\MenuControls\Dto\PaginationItem;
 
 /**
- * Builder for pagination objects that can be used in templates.
- * Supports different pagination variants like standard pagination,
- * load-more buttons and infinite scrolling.
+ * Builder for Pagination DTOs.
+ *
+ * Wraps TYPO3's SlidingWindowPagination and produces a Pagination DTO
+ * ready for consumption in Fluid templates.
+ *
+ * The builder is decoupled from the HTTP request. The controller provides
+ * the current page number (read from the request) and URL-building closures.
+ * The template decides how to present the pagination — numbered strip,
+ * load-more button, infinite scroll, or any other pattern.
+ *
+ * Basic usage:
+ *
+ *   $currentPage = (int)($request->getArgument('page') ?? 1);
+ *
+ *   $builder = (new PaginationBuilder($allRecords, $currentPage))
+ *       ->withItemsPerPage(12)
+ *       ->withUrlBuilder(fn(int $page) => $this->uriBuilder->uriFor('list', ['page' => $page ?: null]))
+ *       ->withFragmentUrlBuilder(fn(int $page) => ...)
+ *       ->addPaginationLinksToHead();
+ *
+ *   $pagination = $builder->build();
+ *   $pageRecords = $builder->getPaginatedItems();
+ *
+ * Note: addPaginationLinksToHead() is side-effectful — it writes rel=prev/next
+ * link tags to the HTML head for SEO. Call it before build() when needed.
  */
+#[Autoconfigure(public: true)]
 class PaginationBuilder
 {
-	/**
-	 * @param array $records The records to paginate
-	 * @param Request $request The current request
-	 * @param UriBuilder $uriBuilder The controller URI builder
-	 * @param string $menuActionName The controller action name for the menu
-	 * @param int $pluginContentRecordUid Content element UID for fragment links (optional)
-	 * @param int $pluginFragmentPageType Page type for fragment requests (optional)
-	 * @param null|Closure(array):string $fragmentUrlBuilder Custom URL builder for fragment URLs (optional)
-	 */
-	public function __construct(
-		protected array      $records,
-		protected Request    $request,
-		protected UriBuilder $uriBuilder,
-		protected string     $menuActionName,
-		protected int        $pluginContentRecordUid = 0,
-		protected int        $pluginFragmentPageType = 0,
-		protected ?\Closure  $fragmentUrlBuilder = null
-	)
-	{
-	}
+    /**
+     * Cached SlidingWindowPagination instance.
+     * Invalidated when itemsPerPage or maximumLinks changes.
+     */
+    protected ?SlidingWindowPagination $slidingWindowPagination = null;
 
-	protected ?SlidingWindowPagination $slidingWindowPagination = null;
+    /**
+     * Number of items to display per page.
+     */
+    protected int $itemsPerPage = 12;
 
-	/**
-	 * Default settings for the pagination builder.
-	 * @see configure() method for detailed explanation of each setting.
-	 */
-	protected array $settings = [
-		'pageArgumentKey' => 'page',
-		'itemsPerPage' => 12,
-		'maximumLinks' => 3,
-		'variant' => ''
-	];
+    /**
+     * Maximum number of page number links to show in the sliding window.
+     */
+    protected int $maximumLinks = 3;
 
-	/**
-	 * Configures the pagination builder with custom settings.
-	 * Uses fluent interface pattern to allow method chaining.
-	 *
-	 * Available settings:
-	 * - pageArgumentKey: Request argument name for the page number
-	 * - itemsPerPage: Number of items to display per page (default: 12)
-	 * - maximumLinks: Maximum number of page links to show in pagination window (default: 3)
-	 * - variant: Pagination style ('', 'load-more', or 'infinite-scroll')
-	 *   - Empty string: Standard numbered pagination
-	 *   - 'load-more': Defines a "load more" pagination item
-	 *   - 'infinite-scroll': Defines a "load more" pagination item with trigger "intersect"
-	 *
-	 * @param array $settings Custom settings to override defaults
-	 */
-	public function configure(array $settings): self
-	{
-		$this->settings = array_merge($this->settings, $settings);
-		$this->slidingWindowPagination = null;
-		return $this;
-	}
+    /**
+     * Builds a standard (absolute) URL for a given page number.
+     *
+     * @var \Closure(int $page): string
+     */
+    protected \Closure $urlBuilder;
 
-	/**
-	 * Builds a Pagination object based on the current configuration.
-	 * Returns different pagination structures based on the selected variant.
-	 */
-	public function build(): Pagination
-	{
-		$loadMoreArgs = $this->request->getArguments();
-		unset($loadMoreArgs['recordUid']);
-		$swp = $this->getSlidingWindowPagination();
-		$loadMoreArgs[$this->settings['pageArgumentKey']] = $swp->getNextPageNumber();
-		return match ($this->settings['variant']) {
-			'load-more', 'infinite-scroll' => new Pagination(
-				loadMore: new PaginationItem(
-					label: '+',
-					url: $this->buildUri($loadMoreArgs),
-					fragmentUrl: $this->buildUri($loadMoreArgs, true),
-					disabled: !$swp->getNextPageNumber()
-				),
-				loadMoreTrigger: $this->settings['variant'] === 'infinite-scroll' ? 'intersect' : 'click',
-			),
-			default => new Pagination(
-				currentPage: $swp->getPaginator()->getCurrentPageNumber(),
-				prev: $this->buildItem($swp->getPreviousPageNumber(), '<'),
-				next: $this->buildItem($swp->getNextPageNumber(), '>'),
-				window: array_map(
-					function ($page) {
-						return $this->buildItem($page);
-					},
-					$swp->getAllPageNumbers()
-				),
-				separatorLeft: $swp->getHasLessPages(),
-				separatorRight: $swp->getHasMorePages(),
-				first: $swp->getFirstPageNumber() < $swp->getDisplayRangeStart() ? $this->buildItem($swp->getFirstPageNumber()) : null,
-				last: $swp->getLastPageNumber() > $swp->getDisplayRangeEnd() ? $this->buildItem($swp->getLastPageNumber()) : null,
-			)
-		};
-	}
+    /**
+     * Builds a fragment/AJAX URL for a given page number.
+     * When not provided, fragmentUrl on all items will be an empty string.
+     *
+     * @var \Closure(int $page): string|null
+     */
+    protected ?\Closure $fragmentUrlBuilder = null;
 
-	/**
-	 * Returns the paginated items for the current page
-	 */
-	public function getPaginatedItems(): array
-	{
-		return $this->getSlidingWindowPagination()->getPaginator()->getPaginatedItems();
-	}
+    /**
+     * @param array $records The full (unpaginated) record set to paginate
+     * @param int $currentPage The current page number, read from the request by the controller
+     */
+    public function __construct(
+        protected array $records,
+        protected int   $currentPage = 1,
+    ) {
+        $this->urlBuilder = fn(int $page) => '';
+    }
 
-	/**
-	 * Adds prev/next links to the HTML head for SEO optimization
-	 */
-	public function addPaginationLinksToHead(): self
-	{
-		$arguments = $this->request->getArguments();
-		$pageRenderer = GeneralUtility::makeInstance(PageRenderer::class);
-		if ($this->getSlidingWindowPagination()->getPreviousPageNumber()) {
-			$arguments[$this->settings['pageArgumentKey']] = $this->getSlidingWindowPagination()->getPreviousPageNumber();
-			$pageRenderer->addHeaderData('<link rel="prev" href="' . $this->buildUri($arguments) . '" />');
-		}
-		if ($this->getSlidingWindowPagination()->getNextPageNumber()) {
-			$arguments[$this->settings['pageArgumentKey']] = $this->getSlidingWindowPagination()->getNextPageNumber();
-			$pageRenderer->addHeaderData('<link rel="next" href="' . $this->buildUri($arguments) . '" />');
-		}
-		return $this;
-	}
+    // -------------------------------------------------------------------------
+    // Fluent configuration
+    // -------------------------------------------------------------------------
 
-	/**
-	 * Gets or creates the SlidingWindowPagination instance
-	 */
-	public function getSlidingWindowPagination(): SlidingWindowPagination
-	{
-		if (!$this->slidingWindowPagination) {
-			$paginator = new ArrayPaginator(
-				$this->records,
-				intval($this->request->getArguments()[$this->settings['pageArgumentKey']] ?? '1'),
-				$this->settings['itemsPerPage']
-			);
-			$this->slidingWindowPagination = new SlidingWindowPagination($paginator, $this->settings['maximumLinks']);
-		}
-		return $this->slidingWindowPagination;
-	}
+    /**
+     * Sets the number of items to display per page.
+     */
+    public function withItemsPerPage(int $itemsPerPage): self
+    {
+        $this->itemsPerPage = $itemsPerPage;
+        $this->slidingWindowPagination = null;
+        return $this;
+    }
 
-	/**
-	 * Builds a pagination item for a specific page
-	 *
-	 * @param int|null $page Page number
-	 * @param string $label Custom label (uses page number if empty)
-	 */
-	protected function buildItem(?int $page, string $label = ''): ?PaginationItem
-	{
-		if (!$page) {
-			return null;
-		}
-		$arguments = $this->request->getArguments();
-		$active = $page == intval($arguments[$this->settings['pageArgumentKey']] ?? '1');
-		unset($arguments['recordUid']);
-		if ($page === 1) {
-			unset($arguments[$this->settings['pageArgumentKey']]);
-		} else {
-			$arguments[$this->settings['pageArgumentKey']] = $page;
-		}
-		return new PaginationItem(
-			label: $label ?: $page,
-			url: $this->buildUri($arguments),
-			fragmentUrl: $this->buildUri($arguments, true),
-			active: $active,
-		);
-	}
+    /**
+     * Sets the maximum number of page links shown in the sliding window.
+     */
+    public function withMaximumLinks(int $maximumLinks): self
+    {
+        $this->maximumLinks = $maximumLinks;
+        $this->slidingWindowPagination = null;
+        return $this;
+    }
 
-	/**
-	 * Builds a URI for pagination links
-	 *
-	 * @param array $arguments Request arguments for the URI
-	 * @param bool $isFragmentUri Whether to build a fragment URI for AJAX requests (default: false)
-	 */
-	protected function buildUri(array $arguments, bool $isFragmentUri = false): string
-	{
-		if ($isFragmentUri && $this->fragmentUrlBuilder) {
-			return ($this->fragmentUrlBuilder)($arguments);
-		}
-		if ($isFragmentUri && $this->settings['pluginContentRecordUidArgumentKey'] && $this->pluginContentRecordUid) {
-			$arguments[$this->settings['pluginContentRecordUidArgumentKey']] = $this->pluginContentRecordUid;
-		}
-		return $this->uriBuilder
-			->reset()
-			->setCreateAbsoluteUri(!$isFragmentUri)
-			->setTargetPageType($isFragmentUri ? $this->pluginFragmentPageType : 0)
-			->setTargetPageUid($this->request->getAttribute('routing')->getPageId())
-			->uriFor($this->menuActionName, $arguments);
-	}
+    /**
+     * Sets the URL builder closure.
+     * Receives the target page number; must return an absolute URL string.
+     *
+     * Convention: page 1 should produce a URL without a page argument
+     * to ensure a canonical first page URL.
+     *
+     * Example:
+     *   fn(int $page) => $this->uriBuilder->uriFor('list', ['page' => $page > 1 ? $page : null])
+     *
+     * @param \Closure(int $page): string $urlBuilder
+     */
+    public function withUrlBuilder(\Closure $urlBuilder): self
+    {
+        $this->urlBuilder = $urlBuilder;
+        return $this;
+    }
+
+    /**
+     * Sets the fragment/AJAX URL builder closure.
+     * Receives the target page number; must return a relative URL string.
+     * When not provided, fragmentUrl on all items will be an empty string.
+     *
+     * @param \Closure(int $page): string $fragmentUrlBuilder
+     */
+    public function withFragmentUrlBuilder(\Closure $fragmentUrlBuilder): self
+    {
+        $this->fragmentUrlBuilder = $fragmentUrlBuilder;
+        return $this;
+    }
+
+    // -------------------------------------------------------------------------
+    // Side effects
+    // -------------------------------------------------------------------------
+
+    /**
+     * Writes rel=prev and rel=next link tags to the HTML head for SEO.
+     *
+     * Uses the configured urlBuilder closure to produce canonical page URLs.
+     * Call before build() if SEO link tags are needed.
+     *
+     * @param PageRenderer|null $pageRenderer Defaults to GeneralUtility::makeInstance(PageRenderer::class)
+     */
+    public function addPaginationLinksToHead(?PageRenderer $pageRenderer = null): self
+    {
+        $pageRenderer ??= GeneralUtility::makeInstance(PageRenderer::class);
+        $swp = $this->getSlidingWindowPagination();
+
+        if ($prev = $swp->getPreviousPageNumber()) {
+            $pageRenderer->addHeaderData('<link rel="prev" href="' . ($this->urlBuilder)($prev) . '" />');
+        }
+        if ($next = $swp->getNextPageNumber()) {
+            $pageRenderer->addHeaderData('<link rel="next" href="' . ($this->urlBuilder)($next) . '" />');
+        }
+
+        return $this;
+    }
+
+    // -------------------------------------------------------------------------
+    // Build
+    // -------------------------------------------------------------------------
+
+    /**
+     * Builds and returns the Pagination DTO.
+     *
+     * Always produces the full pagination structure. Templates decide which
+     * parts to render — use nextItem alone for load-more or infinite scroll,
+     * use the full set for a numbered pagination strip.
+     */
+    public function build(): Pagination
+    {
+        $swp = $this->getSlidingWindowPagination();
+
+        return new Pagination(
+            currentPage: $swp->getPaginator()->getCurrentPageNumber(),
+            previousItem: $this->buildItem($swp->getPreviousPageNumber(), '<'),
+            nextItem: $this->buildItem($swp->getNextPageNumber(), '>'),
+            windowItems: array_map(
+                fn(int $page) => $this->buildItem($page),
+                $swp->getAllPageNumbers()
+            ),
+            hasSeparatorBefore: $swp->getHasLessPages(),
+            hasSeparatorAfter: $swp->getHasMorePages(),
+            firstItem: $swp->getFirstPageNumber() < $swp->getDisplayRangeStart()
+                ? $this->buildItem($swp->getFirstPageNumber())
+                : null,
+            lastItem: $swp->getLastPageNumber() > $swp->getDisplayRangeEnd()
+                ? $this->buildItem($swp->getLastPageNumber())
+                : null,
+        );
+    }
+
+    /**
+     * Returns the slice of records for the current page.
+     * Call this after configuring the builder to get the records to render.
+     *
+     * @return array The paginated record subset for the current page
+     */
+    public function getPaginatedItems(): array
+    {
+        return $this->getSlidingWindowPagination()->getPaginator()->getPaginatedItems();
+    }
+
+    /**
+     * Returns the underlying SlidingWindowPagination instance.
+     * Exposed for advanced use cases — prefer getPaginatedItems() and build() for typical usage.
+     */
+    public function getSlidingWindowPagination(): SlidingWindowPagination
+    {
+        if (!$this->slidingWindowPagination) {
+            $this->slidingWindowPagination = new SlidingWindowPagination(
+                new ArrayPaginator($this->records, $this->currentPage, $this->itemsPerPage),
+                $this->maximumLinks,
+            );
+        }
+        return $this->slidingWindowPagination;
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
+    /**
+     * Builds a single PaginationItem for a given page number.
+     * Returns null when $page is null, signalling the item does not exist.
+     *
+     * @param int|null $page Target page number
+     * @param string $label Custom display label. Defaults to the page number as a string.
+     */
+    protected function buildItem(?int $page, string $label = ''): ?PaginationItem
+    {
+        if ($page === null) {
+            return null;
+        }
+        return new PaginationItem(
+            label: $label !== '' ? $label : (string)$page,
+            url: ($this->urlBuilder)($page),
+            fragmentUrl: $this->fragmentUrl($page),
+            active: $page === $this->currentPage,
+        );
+    }
+
+    protected function fragmentUrl(int $page): string
+    {
+        return $this->fragmentUrlBuilder ? ($this->fragmentUrlBuilder)($page) : '';
+    }
 }

@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace UBOS\MenuControls\Domain\Repository;
 
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -9,148 +11,209 @@ use TYPO3\CMS\Extbase\Persistence\QueryInterface;
 use UBOS\MenuControls\Dto\MenuDemand;
 
 /**
- * Provides common repository functionality for finding records based on MenuDemand objects.
- * Can be implemented by any repository that needs to support menu filtering capabilities.
+ * Provides a complete implementation of findByMenuDemand() for any Extbase repository.
+ *
+ * Usage — add to your repository alongside the interface:
+ *
+ *   class NewsRepository extends Repository implements MenuDemandRepositoryInterface
+ *   {
+ *       use FindByMenuDemandRepositoryTrait;
+ *
+ *       protected function getAdditionalMenuDemandConstraints(QueryInterface $query, MenuDemand $demand): array
+ *       {
+ *           return [
+ *               $query->equals('hidden', 0),
+ *               $query->greaterThan('datetime', $demand->additionalSettings['cutoffDate'] ?? 0),
+ *           ];
+ *       }
+ *   }
  */
 trait FindByMenuDemandRepositoryTrait
 {
-	/**
-	 * @return QueryInterface
-	 */
-	abstract public function createQuery();
+    /**
+     * Required by all Extbase repositories — provides the query factory.
+     */
+    abstract public function createQuery(): QueryInterface;
 
-	/**
-	 * Maps database rows to domain objects
-	 */
-	public function map(array $rows): array
-	{
-		return GeneralUtility::makeInstance(DataMapper::class)->map($this->objectType, $rows);
-	}
+    /**
+     * Maps raw DB rows to domain objects using Extbase's DataMapper.
+     * Useful when you have raw query results and need hydrated models.
+     *
+     * @param array $rows Raw associative DB rows
+     * @return array Mapped domain objects
+     */
+    public function map(array $rows): array
+    {
+        return GeneralUtility::makeInstance(DataMapper::class)->map($this->objectType, $rows);
+    }
 
-	/**
-	 * Hook method to add custom constraints based on the demand object.
-	 * Implementing repositories can override this to add their own constraints.
-	 */
-	protected function getAdditionalMenuDemandConstraints(QueryInterface $query, MenuDemand $demand): array
-	{
-		return [];
-	}
+    /**
+     * Hook for adding repository-specific constraints to a MenuDemand query.
+     *
+     * Override this in your repository to add constraints based on record-specific
+     * fields or values from $demand->additionalSettings.
+     *
+     * @return ConstraintInterface[] Additional constraints to AND into the query
+     */
+    protected function getAdditionalMenuDemandConstraints(QueryInterface $query, MenuDemand $demand): array
+    {
+        return [];
+    }
 
-	/**
-	 * Finds records based on a MenuDemand configuration.
-	 * Handles pagination, categories, ordering and record selection.
-	 *
-	 * @param MenuDemand $demand The demand object containing search criteria
-	 * @param bool $returnRawQueryResult Whether to return raw query results instead of domain objects (default: false)
-	 * @return array The matched records
-	 */
-	public function findByMenuDemand(MenuDemand $demand, bool $returnRawQueryResult = false): array
-	{
-		$query = $this->createQuery();
-		$constraints = $this->getAdditionalMenuDemandConstraints($query, $demand);
-		$pidUidConstraints = [];
-		if ($demand->records) {
-			foreach (explode(',', $demand->records) as $key => $value) {
-				$pidUidConstraints[] = $query->equals('uid', $value);
-				$pidUidConstraints[] = $query->equals('l10n_parent', $value);
-			}
-		}
-		if ($demand->parents) {
-			foreach (explode(',', $demand->parents) as $key => $value) {
-				$pidUidConstraints[] = $query->equals('pid', $value);
-			}
-		}
-		if ($pidUidConstraints) {
-			$constraints[] = $query->logicalOr(...$pidUidConstraints);
-		}
+    /**
+     * Finds records matching the given MenuDemand.
+     *
+     * Handles: storage page / specific record selection, category group filtering,
+     * ordering, limit/offset, and optional PHP-side reordering by $records sequence.
+     *
+     * @param MenuDemand $demand The demand object containing search criteria
+     * @param bool $returnRawQueryResult When true, returns raw associative DB rows
+     *   instead of mapped domain objects
+     * @return array The matched records
+     */
+    public function findByMenuDemand(MenuDemand $demand, bool $returnRawQueryResult = false): array
+    {
+        $query = $this->createQuery();
+        $constraints = $this->getAdditionalMenuDemandConstraints($query, $demand);
 
-		$categoriesConstraints = [];
-		foreach ($demand->categories as $key => $group) {
-			if ($group['uids'] ?? '') {
-				$categoriesConstraints[] = $this->createCategoryConstraint($query, $group['uids'] ?? '', $group['conjunction'] ?? 'or');
-			}
-		}
-		if ($categoriesConstraints) {
-			$constraints[] = match (strtolower($demand->categoriesConjunction)) {
-				'or' => $query->logicalOr(...$categoriesConstraints),
-				'and' => $query->logicalAnd(...$categoriesConstraints),
-				'notor' => $query->logicalNot($query->logicalOr(...$categoriesConstraints)),
-				'notand' => $query->logicalNot($query->logicalAnd(...$categoriesConstraints)),
-				default => $query->logicalAnd(...$categoriesConstraints)
-			};
-		}
+        // Storage page / specific record constraints
+        $scopeConstraints = [];
+        if ($demand->records) {
+            foreach (GeneralUtility::intExplode(',', $demand->records, true) as $uid) {
+                $scopeConstraints[] = $query->equals('uid', $uid);
+                $scopeConstraints[] = $query->equals('l10n_parent', $uid);
+            }
+        }
+        if ($demand->parents) {
+            foreach (GeneralUtility::intExplode(',', $demand->parents, true) as $pid) {
+                $scopeConstraints[] = $query->equals('pid', $pid);
+            }
+        }
+        if ($scopeConstraints) {
+            $constraints[] = $query->logicalOr(...$scopeConstraints);
+        }
 
-		if ($demand->limit) {
-			$query->setLimit($demand->limit);
-		}
-		if ($demand->offset) {
-			$query->setOffset($demand->offset);
-		}
-		$orderDirection = $demand->orderDirection === 'desc' ? QueryInterface::ORDER_DESCENDING : QueryInterface::ORDER_ASCENDING;
-		$query->setOrderings([$demand->orderField => $orderDirection, 'sorting' => $orderDirection]);
-		if (!$constraints) {
-			$constraints[] = $query->greaterThan('uid', 0);
-		}
+        // Category group constraints
+        $categoryGroupConstraints = [];
+        foreach ($demand->categoryGroups as $group) {
+            if ($group['uids'] ?? '') {
+                $groupConstraint = $this->buildCategoryGroupConstraint(
+                    $query,
+                    $group['uids'],
+                    $group['conjunction'] ?? 'or'
+                );
+                if ($groupConstraint) {
+                    $categoryGroupConstraints[] = $groupConstraint;
+                }
+            }
+        }
+        if ($categoryGroupConstraints) {
+            $constraints[] = match (strtolower($demand->categoryGroupsConjunction)) {
+                'or'     => $query->logicalOr(...$categoryGroupConstraints),
+                'notor'  => $query->logicalNot($query->logicalOr(...$categoryGroupConstraints)),
+                'notand' => $query->logicalNot($query->logicalAnd(...$categoryGroupConstraints)),
+                default  => $query->logicalAnd(...$categoryGroupConstraints),
+            };
+        }
 
-		$records = $query->matching($query->logicalAnd(...$constraints))->execute($returnRawQueryResult);
-		if (!$returnRawQueryResult) {
-			$records = $records->toArray();
-		}
+        // Limit and offset
+        if ($demand->limit) {
+            $query->setLimit($demand->limit);
+        }
+        if ($demand->offset) {
+            $query->setOffset($demand->offset);
+        }
 
-		if ($demand->orderByRecordsProperty) {
-			$recordUids = explode(',', $demand->records);
-			$notInUidsIterator = 0;
-			$newArray = [];
-			foreach ($records as $record) {
-				$uid = is_array($record) ? $record['uid'] : $record->getUid();
-				$selectionPosition = array_search($uid, $recordUids);
-				if ($selectionPosition !== false) {
-					$newArray[$selectionPosition] = $record;
-				} else {
-					$newArray[count($recordUids) + $notInUidsIterator] = $record;
-					$notInUidsIterator++;
-				}
-			}
-			ksort($newArray);
-			return $newArray;
-		}
-		return $records;
-	}
+        // Ordering — secondary sort by 'sorting' only when the primary field differs,
+        // and only when the record type is likely to have a 'sorting' field.
+        // Override getAdditionalMenuDemandConstraints() to control ordering instead
+        // if your record type does not have a 'sorting' field.
+        $orderDirection = strtolower($demand->orderDirection) === 'desc'
+            ? QueryInterface::ORDER_DESCENDING
+            : QueryInterface::ORDER_ASCENDING;
+        $orderings = [$demand->orderField => $orderDirection];
+        if ($demand->orderField !== 'sorting') {
+            $orderings['sorting'] = $orderDirection;
+        }
+        $query->setOrderings($orderings);
 
-	/**
-	 * Creates a category constraint for the query based on provided categories.
-	 * Supports different logical conjunctions: OR, AND, NOT OR, NOT AND.
-	 *
-	 * @param QueryInterface $query The query to enhance
-	 * @param string|array $categories Category UIDs as string (comma-separated) or array
-	 * @param string $conjunction How to combine the category constraints (or, and, notor, notand)
-	 */
-	protected function createCategoryConstraint(
-		QueryInterface $query,
-		string|array   $categories,
-		string         $conjunction,
-	): ?ConstraintInterface
-	{
-		$constraint = null;
-		$categoryConstraints = [];
+        // Fallback constraint when nothing else is set — avoids an empty WHERE clause
+        if (!$constraints) {
+            $constraints[] = $query->greaterThan('uid', 0);
+        }
 
-		if (empty($conjunction)) {
-			return null;
-		}
-		if (!is_array($categories)) {
-			$categories = GeneralUtility::intExplode(',', $categories, true);
-		}
-		foreach ($categories as $category) {
-			$categoryConstraints[] = $query->contains('categories', $category);
-		}
-		if ($categoryConstraints) {
-			$constraint = match (strtolower($conjunction)) {
-				'or' => $query->logicalOr(...$categoryConstraints),
-				'and' => $query->logicalAnd(...$categoryConstraints),
-				'notor' => $query->logicalNot($query->logicalOr(...$categoryConstraints)),
-				'notand' => $query->logicalNot($query->logicalAnd(...$categoryConstraints))
-			};
-		}
-		return $constraint;
-	}
+        $records = $query->matching($query->logicalAnd(...$constraints))->execute($returnRawQueryResult);
+
+        if (!$returnRawQueryResult) {
+            $records = $records->toArray();
+        }
+
+        // PHP-side reordering to match the sequence of UIDs in $demand->records
+        if ($demand->orderByRecordsProperty && $demand->records) {
+            $records = $this->reorderByRecordsSequence($records, $demand->records);
+        }
+
+        return $records;
+    }
+
+    /**
+     * Builds a constraint for a single category group.
+     * Supports conjunctions: or, and, notor, notand.
+     *
+     * @param QueryInterface $query
+     * @param string $uids Comma-separated category UIDs
+     * @param string $conjunction How to combine individual category constraints
+     */
+    protected function buildCategoryGroupConstraint(
+        QueryInterface $query,
+        string         $uids,
+        string         $conjunction,
+    ): ?ConstraintInterface
+    {
+        $categoryUids = GeneralUtility::intExplode(',', $uids, true);
+        if (!$categoryUids) {
+            return null;
+        }
+
+        $categoryConstraints = array_map(
+            fn(int $uid) => $query->contains('categories', $uid),
+            $categoryUids
+        );
+
+        return match (strtolower($conjunction)) {
+            'and'    => $query->logicalAnd(...$categoryConstraints),
+            'notor'  => $query->logicalNot($query->logicalOr(...$categoryConstraints)),
+            'notand' => $query->logicalNot($query->logicalAnd(...$categoryConstraints)),
+            default  => $query->logicalOr(...$categoryConstraints),
+        };
+    }
+
+    /**
+     * Reorders records in PHP to match the sequence of UIDs in $demand->records.
+     * Records whose UID appears in the sequence are placed at that position.
+     * Records not in the sequence are appended at the end in their original order.
+     *
+     * @param array $records Fetched records (raw rows or domain objects)
+     * @param string $recordUids Comma-separated UID sequence to match
+     * @return array Reordered records
+     */
+    protected function reorderByRecordsSequence(array $records, string $recordUids): array
+    {
+        $sequence = GeneralUtility::intExplode(',', $recordUids, true);
+        $ordered = [];
+        $remainder = [];
+
+        foreach ($records as $record) {
+            $uid = is_array($record) ? (int)$record['uid'] : $record->getUid();
+            $position = array_search($uid, $sequence, true);
+            if ($position !== false) {
+                $ordered[$position] = $record;
+            } else {
+                $remainder[] = $record;
+            }
+        }
+
+        ksort($ordered);
+        return array_values([...$ordered, ...$remainder]);
+    }
 }

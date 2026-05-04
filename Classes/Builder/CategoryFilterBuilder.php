@@ -1,423 +1,613 @@
 <?php
 
+declare(strict_types=1);
+
 namespace UBOS\MenuControls\Builder;
 
 use Symfony\Component\DependencyInjection\Attribute\Autoconfigure;
-use TYPO3\CMS\Core\Utility\DebugUtility;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
-use TYPO3\CMS\Extbase\Mvc\Request;
-use TYPO3\CMS\Extbase\Mvc\Web\Routing\UriBuilder;
-use TYPO3\CMS\Extbase\Persistence\QueryInterface;
-use TYPO3\CMS\Core\PageTitle\PageTitleProviderInterface;
-
 use UBOS\MenuControls\Domain\Repository\CategoryRepository;
 use UBOS\MenuControls\Domain\Repository\MenuDemandRepositoryInterface;
-use UBOS\MenuControls\Dto\MenuDemand;
 use UBOS\MenuControls\Dto\CategoryFilter;
 use UBOS\MenuControls\Dto\CategoryFilterItem;
+use UBOS\MenuControls\Dto\CategoryItemConfig;
+use UBOS\MenuControls\Dto\MenuDemand;
 
 /**
- * Builder for category filter objects that can be used in templates.
- * Creates a hierarchical filter based on sys_category records.
+ * Builder for CategoryFilter DTOs.
+ *
+ * Stateless with respect to the HTTP request. The builder receives:
+ *   - an ordered list of CategoryItemConfig objects (UIDs + tree settings)
+ *   - the currently active category UIDs as a plain string
+ *   - URL-building closures from the controller
+ *
+ * The builder owns all category DB interaction — it fetches root records
+ * and recursively fetches children as needed. The controller is responsible
+ * only for deciding which UIDs to include, reading the active UIDs from the
+ * request, and providing the URL-building closures.
+ *
+ * Basic usage:
+ *
+ *   $activeUids = $request->getArgument('demand')['categories']['topics']['uids'] ?? '';
+ *
+ *   $filter = (new CategoryFilterBuilder($categoryRepository))
+ *       ->withActiveUids($activeUids)
+ *       ->withMultiSelect(true)
+ *       ->withUrlBuilder(fn(string $uids) => $this->uriBuilder->uriFor('list', [
+ *           'demand' => ['categories' => ['topics' => ['uids' => $uids]]]
+ *       ]))
+ *       ->withFragmentUrlBuilder(fn(string $uids) => ...)
+ *       ->build([
+ *           new CategoryItemConfig(uid: 5),
+ *           new CategoryItemConfig(uid: 12, depth: 2, disabledLevels: 1),
+ *           new CategoryItemConfig(uid: 8),
+ *       ]);
  */
+#[Autoconfigure(public: true)]
 class CategoryFilterBuilder
 {
-	/**
-	 * @param Request $request The current request
-	 * @param UriBuilder $uriBuilder The controller URI builder
-	 * @param string $menuActionName The controller action name for the menu
-	 * @param MenuDemandRepositoryInterface|null $menuRepository Repository for checking potential results (optional)
-	 * @param MenuDemand|null $menuDemand Demand object for checking potential results (optional)
-	 * @param int $pluginContentRecordUid Content element UID for fragment links (default: 0)
-	 * @param int $pluginFragmentPageType Page type for fragment requests (default: 0)
-	 * @param null|Closure(array):string $fragmentUrlBuilder Custom URL builder for fragment URLs (optional)
-	 */
-	public function __construct(
-		protected Request                        $request,
-		protected UriBuilder                     $uriBuilder,
-		protected string                         $menuActionName,
-		protected ?MenuDemandRepositoryInterface $menuRepository = null,
-		protected ?MenuDemand                    $menuDemand = null,
-		protected int                            $pluginContentRecordUid = 0,
-		protected int                            $pluginFragmentPageType = 0,
-		protected ?\Closure						 $fragmentUrlBuilder = null
-	)
-	{
-		$this->categoryRepository = GeneralUtility::makeInstance(CategoryRepository::class);
-	}
+    /**
+     * Currently active category UIDs as a comma-separated string.
+     * Provided by the controller from the current request arguments.
+     */
+    protected string $activeUids = '';
 
-	protected CategoryRepository $categoryRepository;
+    /**
+     * Master multi-select switch.
+     * When false, selecting any item replaces the entire current selection.
+     * When true, per-level behaviour is governed by CategoryItemConfig::$siblingExclusiveLevels.
+     */
+    protected bool $multiSelect = true;
 
-	protected string $activeCategories = '';
+    /**
+     * Builds a standard (absolute) URL for a given filter state.
+     * Receives the new active UIDs string; returns a URL string.
+     *
+     * @var \Closure(string $activeUids): string
+     */
+    protected \Closure $urlBuilder;
 
-	/**
-	 * Default settings for the category filter.
-	 * @see configure() method for detailed explanation of each setting.
-	 */
-	protected array $settings = [
-		// whether to build the filter
-		'active' => true,
-		// category uids to build items from
-		'categories' => '',
-		// category uids to build items with children from
-		'treeCategories' => '',
-		// whether to allow multiselect on the filter
-		'multiSelect' => true,
-		// levels deep tree is built below a parent category
-		'buildTree' => 1,
-		// levels deep tree items are disabled, negative values invert selection
-		'disabledTree' => 1,
-		// levels deep tree is multiselectable, negative values invert selection
-		'multiSelectTree' => 1,
-		// whether to build tree below inactive, non-disabled category
-		'buildTreeBelowEnabledInactive' => false,
-		// check if there are any results for a category
-		'checkPotential' => false,
-		// other arguments to remove when building a filter uri
-		'unsetArguments' => ['page', 'recordUid'],
-		// key of category list in demand->categories
-		'demandCategoriesKey' => '0',
-		// request argument name for plugin content element UID
-		'pluginContentRecordUidArgumentKey' => '',
-		'categoryOrder' => ['sorting' => QueryInterface::ORDER_ASCENDING],
-		'categoryLabelField' => 'title',
-		'categoryLabelFieldFallback' => 'title',
-		'resetLabel' => 'Reset',
-	];
+    /**
+     * Builds a fragment/AJAX URL for a given filter state.
+     * When not provided, fragmentUrl on all items will be an empty string.
+     *
+     * @var \Closure(string $activeUids): string|null
+     */
+    protected ?\Closure $fragmentUrlBuilder = null;
 
-	/**
-	 * Configures the filter builder with custom settings.
-	 *
-	 * Available settings:
-	 * - active: Whether to build the filter at all (default: true)
-	 * - categories: Comma-separated UIDs of categories to include as filter items
-	 * - treeCategories: Comma-separated UIDs of categories to include as parent nodes with children
-	 * - multiSelect: Whether to allow selecting multiple categories at once (default: true)
-	 * - buildTree: How many levels deep to build the category tree (default: 1)
-	 * - disabledTree: How many levels deep tree items are disabled (default: 1)
-	 *   Negative values invert the selection (lower levels disabled, upper levels enabled)
-	 * - multiSelectTree: How many levels deep tree items allow multiple selection (default: 1)
-	 *   Negative values invert the selection
-	 * - buildTreeBelowEnabledInactive: Whether to build tree below inactive, non-disabled categories (default: false)
-	 * - checkPotential: Check if selecting a category would yield any results (default: false)
-	 * - unsetArguments: Arguments to remove when building filter URIs (default: ['page'])
-	 * - demandCategoriesKey: Key of category list in demand->categories (default: '0')
-	 * - pluginContentRecordUidArgumentKey: Request argument name for plugin content element UID
-	 * - categoryOrder: Ordering of categories (default: sorting ASC)
-	 * - categoryLabelField: Field to use for category labels (default: 'title')
-	 * - categoryLabelFieldFallback: Fallback field for category labels (default: 'title')
-	 * - resetLabel: Label for the reset filter item (default: 'Reset')
-	 *
-	 * @param array $settings Custom settings to override defaults
-	 */
-	public function configure(array $settings): self
-	{
-		$this->settings = array_merge($this->settings, $settings);
-		$this->activeCategories =
-			$this->request->hasArgument('demand')
-				? $this->request->getArgument('demand')['categories'][$this->settings['demandCategoriesKey']]['uids'] ?? ''
-				: '';
-		return $this;
-	}
+    /**
+     * Label for the reset item. When empty, no reset item is produced.
+     */
+    protected string $resetLabel = 'Reset';
 
-	/**
-	 * Builds a CategoryFilter object based on the current configuration.
-	 * Creates a hierarchical structure of filter items based on sys_category records.
-	 *
-	 * @return CategoryFilter|null Returns null if filter is disabled or no categories configured
-	 */
-	public function build(): ?CategoryFilter
-	{
-		if (!$this->settings['active'] || (!$this->settings['categories'] && !$this->settings['treeCategories'])) {
-			return null;
-		}
-		$filter = new CategoryFilter(
-			buildTree: (int)$this->settings['buildTree'],
-		);
+    /**
+     * Whether to check if selecting a category would yield any results.
+     */
+    protected bool $checkPotential = false;
 
-		$arguments = $this->request->getArguments();
+    /**
+     * Repository used for DB-based potential checking (N+1 per item).
+     */
+    protected ?MenuDemandRepositoryInterface $potentialRepository = null;
 
-		foreach ($this->settings['unsetArguments'] as $unsetArgument) {
-			unset($arguments[$unsetArgument]);
-		}
+    /**
+     * Base demand cloned per-item for potential checking.
+     */
+    protected ?MenuDemand $potentialDemand = null;
 
-		if ($this->activeCategories) {
-			$resetArguments = $arguments;
-			unset($resetArguments['demand']['categories'][$this->settings['demandCategoriesKey']]['uids']);
-			$filter->resetItem = new CategoryFilterItem(
-				label: $this->settings['resetLabel'],
-				url: $this->buildUri($resetArguments),
-				fragmentUrl: $this->buildUri($resetArguments, true),
-			);
-		}
+    /**
+     * Key within MenuDemand::$categoryGroups to override when cloning
+     * the demand for potential checks.
+     */
+    protected string $potentialGroupKey = '0';
 
-		$this->categoryRepository->setDefaultOrderings($this->settings['categoryOrder']);
+    /**
+     * Pre-fetched records for in-memory potential checking.
+     * When set, avoids additional DB queries entirely.
+     *
+     * @var array<array|object>|null
+     */
+    protected ?array $potentialRecords = null;
 
-		if ($this->settings['categories']) {
-			$categories = $this->categoryRepository->findByUidList($this->settings['categories'], true);
-			foreach ($categories as $category) {
-				$filter->items[] = $this->buildFilterItem($category);
-			}
-		}
+    /**
+     * Category record field to use as the display label.
+     */
+    protected string $labelField = 'title';
 
-		if ($this->settings['treeCategories']) {
-			$treeCategories = $this->categoryRepository->findByUidList($this->settings['treeCategories'], true);
-			foreach ($treeCategories as $category) {
-				$filter->items[] = $this->buildTree(
-					$category,
-					(int)$this->settings['buildTree'],
-					(int)$this->settings['disabledTree'],
-					(int)$this->settings['multiSelectTree']
-				);
-			}
-		}
+    /**
+     * Fallback label field when $labelField is empty on a record.
+     */
+    protected string $labelFieldFallback = 'title';
 
-		return $filter;
-	}
+    public function __construct(
+        protected CategoryRepository $categoryRepository,
+    ) {
+        $this->urlBuilder = fn(string $uids) => '';
+    }
 
-	/**
-	 * Adds the active category names to the page title.
-	 * Useful for SEO to indicate the current filter state in the page title.
-	 *
-	 * @param PageTitleProviderInterface $titleProvider Title provider to modify
-	 * @param string $divider Character(s) to use as divider between title and categories (default: '|')
-	 */
-	public function addCategorySuffixToPageTitle(
-		PageTitleProviderInterface $titleProvider,
-		string $divider = '|'
-	): self
-	{
-		if (!$this->activeCategories) {
-			return $this;
-		}
-		if (!method_exists($titleProvider, 'setTitle')) {
-			return $this;
-		}
-		$categories = $this->categoryRepository->findByUidList($this->activeCategories, true);
-		$pageTitleSuffixCategory =
-			$divider .
-			implode(', ', array_map(function (array $category) {
-				return $this->getCategoryTitle($category);
-			}, $categories));
-		$titleProvider->setRequest($this->request);
-		$titleProvider->setTitle($titleProvider->getTitle() . $pageTitleSuffixCategory);
-		return $this;
-	}
+    // -------------------------------------------------------------------------
+    // Fluent configuration
+    // -------------------------------------------------------------------------
 
-	/**
-	 * Recursively builds a category tree item with its children.
-	 * Handles the complex logic of active/disabled states and multi-selection.
-	 *
-	 * @param array $category The category record to build the tree item for
-	 * @param int $buildTree How many levels deep to build the tree
-	 * @param int $disabledTree How many levels are disabled (negative values invert selection)
-	 * @param int $multiSelectTree How many levels allow multi-selection (negative values invert selection)
-	 * @param array $activeSiblings UIDs of active sibling categories
-	 * @param string $enabledParent UID of enabled parent category (if any)
-	 */
-	protected function buildTree(
-		array    $category,
-		int      $buildTree,
-		int      $disabledTree,
-		int      $multiSelectTree,
-		array    $activeSiblings = [],
-		string   $enabledParent = '',
-	): CategoryFilterItem
-	{
-		$disabled = $disabledTree > 0;
-		$multiSelect = $multiSelectTree > 0;
-		$isActive = $this->activeCategories && GeneralUtility::inList($this->activeCategories, (string)$category['uid']);
-		if (!$buildTree || (!$this->settings['buildTreeBelowEnabledInactive'] && !$disabled && !$isActive)) {
-			return $this->buildFilterItem(
-				$category,
-				$disabled,
-				$multiSelect,
-				[],
-				$activeSiblings,
-				$enabledParent
-			);
-		}
+    /**
+     * Sets the currently active category UIDs (comma-separated string).
+     * The controller reads this from the request and passes it in explicitly —
+     * the builder does not touch the request.
+     */
+    public function withActiveUids(string $activeUids): self
+    {
+        $this->activeUids = $activeUids;
+        return $this;
+    }
 
-		$activeChildren = [];
-		$subCategories = $this->categoryRepository->findByParent($category['uid'], true);
-		foreach ($subCategories as $subCategory) {
-			if (GeneralUtility::inList($this->activeCategories, (string)$subCategory['uid'])) {
-				$activeChildren[] = $subCategory['uid'];
-			}
-		}
+    /**
+     * Sets the global multi-select flag.
+     * When false the entire filter behaves as single-select regardless of
+     * CategoryItemConfig::$siblingExclusiveLevels values.
+     */
+    public function withMultiSelect(bool $multiSelect): self
+    {
+        $this->multiSelect = $multiSelect;
+        return $this;
+    }
 
-		$item = $this->buildFilterItem(
-			$category,
-			$disabled,
-			$multiSelect,
-			$activeChildren,
-			$activeSiblings,
-			$enabledParent
-		);
+    /**
+     * Sets the URL builder closure.
+     * Receives the new active UIDs string; must return an absolute URL string.
+     *
+     * @param \Closure(string $activeUids): string $urlBuilder
+     */
+    public function withUrlBuilder(\Closure $urlBuilder): self
+    {
+        $this->urlBuilder = $urlBuilder;
+        return $this;
+    }
 
-		$buildTree--;
-		foreach ($subCategories as $subCategory) {
-			$item->children[] = $this->buildTree(
-				$subCategory,
-				$buildTree,
-				$this->getTreeIteratorAdvancement($disabledTree),
-				$this->getTreeIteratorAdvancement($multiSelectTree),
-				$activeChildren,
-				enabledParent: !$disabled ? (string)$category['uid'] : '',
-			);
-		}
-		return $item;
-	}
+    /**
+     * Sets the fragment/AJAX URL builder closure.
+     * Receives the new active UIDs string; must return a relative URL string.
+     * When not provided, fragmentUrl on all items will be an empty string.
+     *
+     * @param \Closure(string $activeUids): string $fragmentUrlBuilder
+     */
+    public function withFragmentUrlBuilder(\Closure $fragmentUrlBuilder): self
+    {
+        $this->fragmentUrlBuilder = $fragmentUrlBuilder;
+        return $this;
+    }
 
-	/**
-	 * Builds a single filter item for a category.
-	 * Handles active states, URL generation, and potential result checking.
-	 *
-	 * @param array $category The category record
-	 * @param bool $disabled Whether the item should be disabled (default: false)
-	 * @param bool $multiSelect Whether the item allows multi-selection (default: false)
-	 * @param array $activeChildren UIDs of active child categories (default: [])
-	 * @param array $activeSiblings UIDs of active sibling categories (default: [])
-	 * @param string $enabledParent UID of enabled parent category (default: '')
-	 */
-	protected function buildFilterItem(
-		array    $category,
-		bool     $disabled = false,
-		bool     $multiSelect = false,
-		array    $activeChildren = [],
-		array    $activeSiblings = [],
-		string   $enabledParent = '',
-	): CategoryFilterItem
-	{
-		$arguments = $this->request->getArguments();
-		$uid = (string)$category['uid'];
-		foreach ($this->settings['unsetArguments'] as $unsetArgument) {
-			unset($arguments[$unsetArgument]);
-		}
+    /**
+     * Sets the label for the reset filter item.
+     * Pass an empty string to suppress the reset item entirely.
+     */
+    public function withResetLabel(string $resetLabel): self
+    {
+        $this->resetLabel = $resetLabel;
+        return $this;
+    }
 
-		$isActive = $this->activeCategories && GeneralUtility::inList($this->activeCategories, $uid);
+    /**
+     * Enables DB-based potential checking (one query per filter item).
+     * The demand is cloned per item; the active UIDs for the given group key
+     * are replaced before querying.
+     *
+     * For small record sets, prefer withPotentialRecords() to avoid N+1 queries.
+     *
+     * @param string $groupKey Key within MenuDemand::$categoryGroups to override
+     */
+    public function withPotentialRepository(
+        MenuDemandRepositoryInterface $repository,
+        MenuDemand $demand,
+        string $groupKey = '0',
+    ): self {
+        $this->potentialRepository = $repository;
+        $this->potentialDemand = $demand;
+        $this->potentialGroupKey = $groupKey;
+        $this->checkPotential = true;
+        return $this;
+    }
 
-		if ($activeChildren) {
-			$closeArguments = $arguments;
-			$closeList = implode(',', array_diff(explode(',', $this->activeCategories), $activeChildren));
-			if ($closeList) {
-				$closeArguments['demand']['categories'][$this->settings['demandCategoriesKey']]['uids'] = $closeList;
-			} else {
-				unset($closeArguments['demand']['categories'][$this->settings['demandCategoriesKey']]['uids']);
-			}
-			$closeItem = new CategoryFilterItem(
-				label: (string)count($activeChildren),
-				url: $this->buildUri($closeArguments),
-				fragmentUrl: $this->buildUri($closeArguments, true),
-			);
-		}
+    /**
+     * Enables in-memory potential checking against a pre-fetched record set.
+     * No additional DB queries are made — potential is checked by scanning
+     * the provided records for each category UID.
+     *
+     * Records must expose categories either as:
+     *   - an array under a 'categories' key (raw DB rows with resolved MM)
+     *   - via a getCategories() method returning objects with getUid()
+     *
+     * @param array<array|object> $records
+     */
+    public function withPotentialRecords(array $records): self
+    {
+        $this->potentialRecords = $records;
+        $this->checkPotential = true;
+        return $this;
+    }
 
-		if ($disabled) {
-			return new CategoryFilterItem(
-				label: $this->getCategoryTitle($category),
-				closeItem: $closeItem ?? null,
-				active: $isActive,
-				activeChildren: $activeChildren,
-			);
-		}
+    /**
+     * Sets the category record field used as the display label.
+     * Falls back to $fallback when the primary field is empty on a record.
+     */
+    public function withLabelField(string $field, string $fallback = 'title'): self
+    {
+        $this->labelField = $field;
+        $this->labelFieldFallback = $fallback;
+        return $this;
+    }
 
-		if ($isActive) {
-			if ($this->activeCategories == (string)$category['uid'] || !$this->settings['multiSelect']) {
-				$newList = $enabledParent;
-			} else {
-				$newList = implode(',', array_diff(explode(',', $this->activeCategories), [$uid]));
-			}
-		} else {
-			if (!$this->settings['multiSelect']) {
-				$newList = $uid;
-			} else if ($multiSelect) {
-				$newList = $this->activeCategories ? $this->activeCategories . ',' . $uid : $uid;
-			} else {
-				$newList = implode(',', array_diff(explode(',', $this->activeCategories), $activeSiblings)) . ',' . $uid;
-			}
-		}
+    // -------------------------------------------------------------------------
+    // Build
+    // -------------------------------------------------------------------------
 
-		$exclusiveArguments = $arguments;
-		$exclusiveArguments['demand']['categories'][$this->settings['demandCategoriesKey']]['uids'] = $uid;
-		$exclusiveItem = new CategoryFilterItem(
-			label: $this->getCategoryTitle($category),
-			url: $this->buildUri($exclusiveArguments),
-			fragmentUrl: $this->buildUri($exclusiveArguments, true),
-			active: true,
-			activeChildren: [],
-		);
+    /**
+     * Builds the CategoryFilter from an ordered list of CategoryItemConfig objects.
+     *
+     * The builder fetches each root category record by UID, then recurses into
+     * children as configured. Configs are processed in the order provided, so
+     * flat items and tree roots can be freely interleaved.
+     *
+     * @param CategoryItemConfig[] $configs
+     */
+    public function build(array $configs): CategoryFilter
+    {
+        // Fetch all root category records in one query
+        $uids = implode(',', array_map(fn(CategoryItemConfig $c) => $c->uid, $configs));
+        $rootRecords = $this->categoryRepository->findByUidList($uids, true);
+        $rootRecordsByUid = array_column($rootRecords, null, 'uid');
 
-		if ($newList) {
-			$arguments['demand']['categories'][$this->settings['demandCategoriesKey']]['uids'] = $newList;
-		} else {
-			unset($arguments['demand']['categories'][$this->settings['demandCategoriesKey']]['uids']);
-		}
+        // Collect all sibling records at the root level for exclusivity computation
+        $rootSiblings = array_values($rootRecordsByUid);
 
-		if ($this->settings['checkPotential'] && $this->menuRepository && $this->menuDemand) {
-			$potentialDemand = clone $this->menuDemand;
-			$potentialDemand->categories[$this->settings['demandCategoriesKey']]['uids'] = $newList;
-			$potentialDemand->limit = 1;
-			$hasNoPotential = !$this->menuRepository->findByMenuDemand($potentialDemand, returnRawQueryResult: true);
-		}
+        $filterItems = [];
+        foreach ($configs as $config) {
+            $category = $rootRecordsByUid[$config->uid] ?? null;
+            if ($category === null) {
+                continue;
+            }
+            $filterItems[] = $config->depth > 0
+                ? $this->buildTree(
+                    $category,
+                    $rootSiblings,
+                    $config->depth,
+                    $config->disabledLevels,
+                    $config->siblingExclusiveLevels,
+                    $config->buildTreeBelowEnabledInactive,
+                )
+                : $this->buildFilterItem(
+                    $category,
+                    disabled: false,
+                    siblingExclusive: !$this->multiSelect || $config->siblingExclusiveLevels !== 0,
+                    activeSiblings: array_values(array_filter(
+                        array_column($rootSiblings, 'uid'),
+                        fn($uid) => $uid !== $config->uid && $this->isActive($uid)
+                    )),
+                );
+        }
 
-		return new CategoryFilterItem(
-			label: $this->getCategoryTitle($category),
-			url: $this->buildUri($arguments),
-			fragmentUrl: $this->buildUri($arguments, true),
-			closeItem: $closeItem ?? null,
-			active: $isActive,
-			hasNoPotential: $hasNoPotential ?? false,
-			activeChildren: $activeChildren,
-			exclusiveItem: $exclusiveItem,
-		);
-	}
+        $resetItem = null;
+        if ($this->resetLabel !== '' && $this->activeUids !== '') {
+            $resetItem = new CategoryFilterItem(
+                label: $this->resetLabel,
+                url: ($this->urlBuilder)(''),
+                fragmentUrl: $this->fragmentUrl(''),
+            );
+        }
 
-	/**
-	 * Builds a URI for filter links
-	 *
-	 * @param array $arguments Request arguments for the URI
-	 * @param bool $isFragmentUri Whether to build a fragment URI for AJAX requests (default: false)
-	 */
-	protected function buildUri(array $arguments, bool $isFragmentUri = false): string
-	{
-		if ($isFragmentUri && $this->fragmentUrlBuilder) {
-			return ($this->fragmentUrlBuilder)($arguments);
-		}
-		if ($isFragmentUri && $this->settings['pluginContentRecordUidArgumentKey'] && $this->pluginContentRecordUid) {
-			$arguments[$this->settings['pluginContentRecordUidArgumentKey']] = $this->pluginContentRecordUid;
-		}
-		return $this->uriBuilder
-			->reset()
-			->setCreateAbsoluteUri(!$isFragmentUri)
-			->setTargetPageType($isFragmentUri ? $this->pluginFragmentPageType : 0)
-			->setTargetPageUid($this->request->getAttribute('routing')->getPageId())
-			->uriFor($this->menuActionName, $arguments);
-	}
+        return new CategoryFilter(
+            items: $filterItems,
+            resetItem: $resetItem,
+        );
+    }
 
-	/**
-	 * Gets the title of a category using the configured label field
-	 *
-	 * @param array $category The category record
-	 */
-	protected function getCategoryTitle(array $category): string
-	{
-		return $category[$this->settings['categoryLabelField']] ?? $category[$this->settings['categoryLabelFieldFallback']] ?? $category['title'];
-	}
+    // -------------------------------------------------------------------------
+    // Tree recursion
+    // -------------------------------------------------------------------------
 
-	/**
-	 * Calculates the next level value for tree iterators.
-	 * Handles the complex logic of how disabled/multiselect levels change when going deeper.
-	 *
-	 * @param int $level The current level value
-	 */
-	protected function getTreeIteratorAdvancement(int $level): int
-	{
-		if ($level > 1) {
-			return $level - 1;
-		}
-		if ($level < 0) {
-			return $level + 1;
-		}
-		return 0;
-	}
+    /**
+     * Recursively builds a tree item with its children.
+     *
+     * @param array $category Current category record (raw DB row)
+     * @param array $siblings All sibling records at this level (used for exclusivity)
+     * @param int $depth Remaining levels to recurse into
+     * @param int $disabledLevels Remaining non-selectable levels counter
+     * @param int $siblingExclusiveLevels Remaining sibling-exclusivity levels counter
+     * @param bool $buildTreeBelowEnabledInactive Whether to show children of enabled-but-inactive parents
+     * @param array $activeSiblings UIDs of currently active siblings at this level
+     * @param string $parentFallbackUid UID to restore when deselecting the last active item in a branch
+     */
+    protected function buildTree(
+        array  $category,
+        array  $siblings,
+        int    $depth,
+        int    $disabledLevels,
+        int    $siblingExclusiveLevels,
+        bool   $buildTreeBelowEnabledInactive,
+        array  $activeSiblings = [],
+        string $parentFallbackUid = '',
+    ): CategoryFilterItem
+    {
+        $disabled = $disabledLevels > 0;
+        $siblingExclusive = $siblingExclusiveLevels > 0;
+        $isActive = $this->isActive($category['uid']);
+
+        // Stop recursing when depth is exhausted, or when the item is
+        // enabled+inactive and we are not configured to build below such items.
+        $shouldRecurse = $depth > 0
+            && ($disabled || $isActive || $buildTreeBelowEnabledInactive);
+
+        if (!$shouldRecurse) {
+            return $this->buildFilterItem(
+                $category,
+                disabled: $disabled,
+                siblingExclusive: $siblingExclusive,
+                activeSiblings: $activeSiblings,
+                parentFallbackUid: $parentFallbackUid,
+            );
+        }
+
+        $subCategories = $this->categoryRepository->findByParent($category['uid'], true);
+
+        $activeChildren = array_values(array_filter(
+            array_column($subCategories, 'uid'),
+            fn($uid) => $this->isActive($uid)
+        ));
+
+        $activeSiblingsAtThisLevel = array_values(array_filter(
+            array_column($siblings, 'uid'),
+            fn($uid) => $uid !== $category['uid'] && $this->isActive($uid)
+        ));
+
+        $item = $this->buildFilterItem(
+            $category,
+            disabled: $disabled,
+            siblingExclusive: $siblingExclusive,
+            activeChildren: $activeChildren,
+            activeSiblings: $activeSiblingsAtThisLevel,
+            parentFallbackUid: $parentFallbackUid,
+        );
+
+        foreach ($subCategories as $subCategory) {
+            $item->children[] = $this->buildTree(
+                $subCategory,
+                $subCategories,
+                $depth - 1,
+                $this->decrementLevelCounter($disabledLevels),
+                $this->decrementLevelCounter($siblingExclusiveLevels),
+                $buildTreeBelowEnabledInactive,
+                activeSiblings: $activeChildren,
+                parentFallbackUid: !$disabled ? (string)$category['uid'] : '',
+            );
+        }
+
+        return $item;
+    }
+
+    // -------------------------------------------------------------------------
+    // Item construction
+    // -------------------------------------------------------------------------
+
+    /**
+     * Builds a single CategoryFilterItem.
+     *
+     * Resolves the new active UIDs string that results from toggling this item,
+     * then delegates all URL construction to the injected closures.
+     *
+     * @param array $category Raw category DB row
+     * @param bool $disabled Whether this item is a non-selectable structural element
+     * @param bool $siblingExclusive Whether selecting this item deselects its siblings
+     * @param int[] $activeChildren UIDs of currently active child categories
+     * @param int[] $activeSiblings UIDs of currently active siblings at this level
+     * @param string $parentFallbackUid UID to restore when deselecting the last active item in a branch
+     */
+    protected function buildFilterItem(
+        array  $category,
+        bool   $disabled = false,
+        bool   $siblingExclusive = false,
+        array  $activeChildren = [],
+        array  $activeSiblings = [],
+        string $parentFallbackUid = '',
+    ): CategoryFilterItem
+    {
+        $uid = (string)$category['uid'];
+        $isActive = $this->isActive((int)$uid);
+        $label = $this->resolveLabel($category);
+
+        // Close item: deselects all active children, keeping other active UIDs intact
+        $closeItem = null;
+        if ($activeChildren) {
+            $closeUids = implode(',', array_diff(
+                GeneralUtility::intExplode(',', $this->activeUids, true),
+                $activeChildren
+            ));
+            $closeItem = new CategoryFilterItem(
+                label: (string)count($activeChildren),
+                url: ($this->urlBuilder)($closeUids),
+                fragmentUrl: $this->fragmentUrl($closeUids),
+            );
+        }
+
+        // Disabled items are structural only — no URL, no toggle
+        if ($disabled) {
+            return new CategoryFilterItem(
+                label: $label,
+                closeItem: $closeItem,
+                active: $isActive,
+                disabled: true,
+                activeChildren: $activeChildren,
+            );
+        }
+
+        $newUids = $this->resolveToggleUids($uid, $isActive, $siblingExclusive, $activeSiblings, $parentFallbackUid);
+
+        // Exclusive item: selects only this category, deselecting everything else
+        $exclusiveItem = new CategoryFilterItem(
+            label: $label,
+            url: ($this->urlBuilder)($uid),
+            fragmentUrl: $this->fragmentUrl($uid),
+            active: $isActive && $this->activeUids === $uid,
+        );
+
+        $hasNoPotential = $this->checkPotential
+            ? $this->wouldYieldNoResults($newUids)
+            : false;
+
+        return new CategoryFilterItem(
+            label: $label,
+            url: ($this->urlBuilder)($newUids),
+            fragmentUrl: $this->fragmentUrl($newUids),
+            closeItem: $closeItem,
+            active: $isActive,
+            hasNoPotential: $hasNoPotential,
+            activeChildren: $activeChildren,
+            exclusiveItem: $exclusiveItem,
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Toggle UID resolution
+    // -------------------------------------------------------------------------
+
+    /**
+     * Resolves the new comma-separated active UIDs string that results from
+     * toggling the given category, respecting the global multiSelect flag and
+     * per-level sibling exclusivity.
+     *
+     * @param string $uid The category being toggled
+     * @param bool $isActive Whether it is currently active
+     * @param bool $siblingExclusive Whether selecting this item deselects its siblings
+     * @param int[] $activeSiblings Currently active siblings at this level
+     * @param string $parentFallbackUid UID to restore when deselecting the last active item in a branch
+     */
+    protected function resolveToggleUids(
+        string $uid,
+        bool   $isActive,
+        bool   $siblingExclusive,
+        array  $activeSiblings,
+        string $parentFallbackUid,
+    ): string
+    {
+        $current = GeneralUtility::intExplode(',', $this->activeUids, true);
+
+        if ($isActive) {
+            $remaining = array_diff($current, [(int)$uid]);
+            if (!$remaining && $parentFallbackUid !== '') {
+                return $parentFallbackUid;
+            }
+            return implode(',', $remaining);
+        }
+
+        // Global single-select: replace everything
+        if (!$this->multiSelect) {
+            return $uid;
+        }
+
+        // Sibling-exclusive: remove active siblings first, then add this UID
+        if ($siblingExclusive) {
+            $without = array_diff($current, $activeSiblings);
+            $without[] = (int)$uid;
+            return implode(',', array_unique($without));
+        }
+
+        // Fully additive
+        $current[] = (int)$uid;
+        return implode(',', array_unique($current));
+    }
+
+    // -------------------------------------------------------------------------
+    // Potential checking
+    // -------------------------------------------------------------------------
+
+    /**
+     * Returns true when applying the given UID list would yield no results,
+     * meaning this filter state has no potential and the item should be marked accordingly.
+     * Uses in-memory checking when potentialRecords are set, otherwise queries the DB.
+     */
+    protected function wouldYieldNoResults(string $newUids): bool
+    {
+        if ($newUids === '') {
+            return false;
+        }
+        if ($this->potentialRecords !== null) {
+            return $this->checkPotentialInMemory($newUids);
+        }
+        if ($this->potentialRepository !== null && $this->potentialDemand !== null) {
+            $demand = clone $this->potentialDemand;
+            $demand->categoryGroups[$this->potentialGroupKey]['uids'] = $newUids;
+            $demand->limit = 1;
+            return empty($this->potentialRepository->findByMenuDemand($demand, true));
+        }
+        return false;
+    }
+
+    /**
+     * Checks potential by scanning pre-fetched records in memory.
+     * Returns true (no potential) when no record contains any of the given category UIDs.
+     *
+     * Supports records exposing categories as:
+     *   - array with 'uid' entries (raw DB rows with resolved MM relations)
+     *   - objects with getCategories() returning an ObjectStorage of objects with getUid()
+     */
+    protected function checkPotentialInMemory(string $newUids): bool
+    {
+        $uids = GeneralUtility::intExplode(',', $newUids, true);
+        foreach ($this->potentialRecords as $record) {
+            $categories = is_array($record)
+                ? ($record['categories'] ?? [])
+                : (method_exists($record, 'getCategories') ? $record->getCategories()->toArray() : []);
+            foreach ($categories as $cat) {
+                $catUid = is_array($cat) ? (int)$cat['uid'] : (int)$cat->getUid();
+                if (in_array($catUid, $uids, true)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
+    protected function isActive(int $uid): bool
+    {
+        return $this->activeUids !== '' && GeneralUtility::inList($this->activeUids, (string)$uid);
+    }
+
+    protected function fragmentUrl(string $uids): string
+    {
+        return $this->fragmentUrlBuilder ? ($this->fragmentUrlBuilder)($uids) : '';
+    }
+
+    /**
+     * Resolves the display label for a category record, falling back through
+     * configured fields to 'title' as a last resort.
+     */
+    protected function resolveLabel(array $category): string
+    {
+        return (string)(
+            ($category[$this->labelField] ?? '') ?:
+            ($category[$this->labelFieldFallback] ?? '') ?:
+            ($category['title'] ?? '')
+        );
+    }
+
+    /**
+     * Decrements a level counter by one step towards zero, preserving sign.
+     *
+     * Used to advance disabledLevels and siblingExclusiveLevels as the tree
+     * recurses deeper. Positive values count down from the top; negative values
+     * count up from the bottom towards zero.
+     *
+     *   N  > 1  →  N - 1  (still counting down from top)
+     *   N  = 1  →  0      (exhausted, next level is unaffected)
+     *   N  = 0  →  0      (no-op)
+     *   N  < 0  →  N + 1  (counting up from bottom towards zero)
+     */
+    protected function decrementLevelCounter(int $value): int
+    {
+        if ($value > 1) return $value - 1;
+        if ($value < 0) return $value + 1;
+        return 0;
+    }
 }

@@ -1,40 +1,54 @@
 <?php
 
+declare(strict_types=1);
+
 namespace UBOS\MenuControls\Dto;
 
 /**
- * Data Transfer Object for pagination information.
- * Contains all necessary data for rendering pagination controls in templates.
- * Supports both standard pagination and load-more/infinite scroll variants.
+ * Data Transfer Object for pagination state.
+ * Contains all data needed to render a pagination control in a Fluid template.
+ *
+ * Templates decide how to present this data — numbered strip, load-more button,
+ * infinite scroll trigger, or any other pattern. The DTO always contains the
+ * full picture; templates use what they need.
  */
 class Pagination
 {
-	/**
-	 * @param int $currentPage Current page number
-	 * @param PaginationItem|null $prev Previous page link
-	 * @param PaginationItem|null $next Next page link
-	 * @param PaginationItem[] $window Links for pages in the current window
-	 * @param bool $separatorLeft Whether to show a separator before the window
-	 * @param bool $separatorRight Whether to show a separator after the window
-	 * @param string $separatorString Text to use for separators
-	 * @param PaginationItem|null $first Link to the first page
-	 * @param PaginationItem|null $last Link to the last page
-	 * @param PaginationItem|null $loadMore Load more button for alternative pagination
-	 * @param string $loadMoreTrigger Trigger type for load more (click or intersect)
-	 */
-	public function __construct(
-		public int             $currentPage = 1,
-		public ?PaginationItem $prev = null,
-		public ?PaginationItem $next = null,
-		public array           $window = [],
-		public bool            $separatorLeft = false,
-		public bool            $separatorRight = false,
-		public string          $separatorString = '...',
-		public ?PaginationItem $first = null,
-		public ?PaginationItem $last = null,
-		public ?PaginationItem $loadMore = null,
-		public string          $loadMoreTrigger = 'click'
-	)
-	{
-	}
+    /**
+     * @param int $currentPage The currently active page number.
+     *
+     * @param PaginationItem|null $previousItem Link to the previous page.
+     *   Null when the current page is the first page.
+     *
+     * @param PaginationItem|null $nextItem Link to the next page.
+     *   Null when the current page is the last page.
+     *   Use this alone to implement load-more or infinite scroll patterns.
+     *
+     * @param PaginationItem[] $windowItems Page links within the current sliding window.
+     *
+     * @param bool $hasSeparatorBefore Whether a separator should be shown between
+     *   $firstItem and the start of $windowItems (i.e. there are pages between them).
+     *
+     * @param bool $hasSeparatorAfter Whether a separator should be shown between
+     *   the end of $windowItems and $lastItem.
+     *
+     * @param string $separatorLabel Text to render for separators (default: '...').
+     *
+     * @param PaginationItem|null $firstItem Link to the first page.
+     *   Null when the first page is already within the window.
+     *
+     * @param PaginationItem|null $lastItem Link to the last page.
+     *   Null when the last page is already within the window.
+     */
+    public function __construct(
+        public int             $currentPage = 1,
+        public ?PaginationItem $previousItem = null,
+        public ?PaginationItem $nextItem = null,
+        public array           $windowItems = [],
+        public bool            $hasSeparatorBefore = false,
+        public bool            $hasSeparatorAfter = false,
+        public string          $separatorLabel = '...',
+        public ?PaginationItem $firstItem = null,
+        public ?PaginationItem $lastItem = null,
+    ) {}
 }
