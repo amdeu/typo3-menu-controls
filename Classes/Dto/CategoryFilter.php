@@ -20,14 +20,11 @@ class CategoryFilter
     public function __construct(
         public array               $items = [],
         public ?CategoryFilterItem $resetItem = null,
-    ) {}
+		public string              $activeUids = '',
+	) {}
 
-    /**
-     * Convenience: whether any filter is currently active.
-     * Templates can use this instead of checking resetItem !== null.
-     */
-    public function isActive(): bool
-    {
-        return $this->resetItem !== null;
-    }
+	public function isActive(): bool
+	{
+		return $this->activeUids !== '';
+	}
 }

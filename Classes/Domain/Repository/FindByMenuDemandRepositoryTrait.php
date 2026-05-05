@@ -33,7 +33,7 @@ trait FindByMenuDemandRepositoryTrait
     /**
      * Required by all Extbase repositories — provides the query factory.
      */
-    abstract public function createQuery(): QueryInterface;
+    abstract public function createQuery();
 
     /**
      * Maps raw DB rows to domain objects using Extbase's DataMapper.

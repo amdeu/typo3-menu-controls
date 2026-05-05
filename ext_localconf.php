@@ -9,20 +9,8 @@ defined('TYPO3') or die();
 
 ExtensionUtility::configurePlugin(
 	'MenuControls',
-	'List',
-	[PageMenuController::class => 'list'],
-);
-
-ExtensionUtility::configurePlugin(
-	'MenuControls',
-	'PaginatedList',
-	[PageMenuController::class => 'paginatedList'],
-);
-
-ExtensionUtility::configurePlugin(
-	'MenuControls',
-	'FilteredList',
-	[PageMenuController::class => 'filteredList'],
+	'PageMenu',
+	[PageMenuController::class => 'menu'],
 );
 
 $GLOBALS['TYPO3_CONF_VARS']['SYS']['fluid']['namespaces']['menuControls'] = ['Amdeu\MenuControls\Components\ComponentCollection'];

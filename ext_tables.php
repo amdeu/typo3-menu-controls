@@ -8,24 +8,17 @@ defined('TYPO3') or die();
 
 ExtensionUtility::registerPlugin(
     'MenuControls',
-    'List',
-    'Page Menu: List',
-    'content-menu-sitemap',
+    'PageMenu',
+    'Menu Controls: Page Menu',
+    'content-special-menu',
     'menus',
+	'Menu of pages with flexible demand, order, pagination and category-based filter.'
 );
 
-ExtensionUtility::registerPlugin(
-    'MenuControls',
-    'PaginatedList',
-    'Page Menu: Paginated List',
-    'content-menu-sitemap',
-    'menus',
-);
-
-ExtensionUtility::registerPlugin(
-    'MenuControls',
-    'FilteredList',
-    'Page Menu: Filtered List',
-    'content-menu-sitemap',
-    'menus',
-);
+$GLOBALS['TCA']['tt_content']['types']['tx_menu_controls_pagemenu']['columnsOverrides'] = [
+	'pi_flexform' => [
+		'config' => [
+			'ds' => 'FILE:EXT:menu_controls/Configuration/FlexForms/PageMenu.xml',
+		],
+	],
+];
