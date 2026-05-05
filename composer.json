@@ -1,7 +1,7 @@
 {
 	"name": "amdeu/typo3-menu-controls",
 	"type": "typo3-cms-extension",
-	"description": "Menu Controls - Helpers for building extbase menus",
+	"description": "Menu Controls - Powerful page menu plugin + helpers for building extbase menus for any record type",
 	"license": "MIT",
 	"require": {
 		"php": "^8.2",
@@ -13,7 +13,7 @@
 	},
 	"autoload": {
 		"psr-4": {
-			"UBOS\\MenuControls\\": "Classes/"
+			"Amdeu\\MenuControls\\": "Classes/"
 		}
 	},
 	"extra": {

@@ -4,6 +4,6 @@ services:
     autoconfigure: true
     public: false
 
-  UBOS\MenuControls\:
+  Amdeu\MenuControls\:
     resource: '../Classes/*'
     exclude: '../Classes/Domain/Model/*'

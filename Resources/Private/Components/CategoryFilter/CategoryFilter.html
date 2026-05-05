@@ -1,0 +1,56 @@
+
+<f:argument name="class" type="string" optional="1" default=""/>
+<f:argument name="block" type="string" optional="1" default="category-filter"/>
+<f:argument name="filter" type="Amdeu\MenuControls\Dto\CategoryFilter"/>
+
+
+<ul class="{block}">
+	<f:for each="{filter.items}" as="item" iteration="i">
+		<li class="{block}__item">
+			<f:render section="Item" arguments="{item:item, block:block}" />
+		</li>
+	</f:for>
+	<f:if condition="{filter.resetItem}">
+		<li class="{block}__item">
+			<a href="{filter.resetItem.url}"
+			   class="{block}__link">
+				{filter.resetItem.label}
+			</a>
+		</li>
+	</f:if>
+</ul>
+
+<f:section name="Item">
+	<f:if condition="{item.disabled}">
+		<f:then>
+			<p class="{block}__label">{item.label}</p>
+		</f:then>
+		<f:else>
+			<a href="{item.url}"
+			   class="{block}__link {block}__toggle{f:if(condition:item.active, then:' --active')}{f:if(condition:item.noPotential, then:' --disabled')}"
+			   aria-pressed="{f:if(condition:item.active, then:'true', else:'false')}">
+				{item.label}
+				<f:if condition="{item.active}">×</f:if>
+			</a>
+		</f:else>
+	</f:if>
+
+	<f:if condition="{item.closeItem}">
+		<a href="{item.closeItem.url}"
+		   class="{block}__link">
+			Close {item.closeItem.label} children
+		</a>
+	</f:if>
+
+	<f:if condition="{item.children}">
+		<ul class="{block}__children">
+			<f:for each="{item.children}" as="childItem">
+				<li class="{block}__item">
+					<f:render section="Item" arguments="{item:childItem, block:block}" />
+				</li>
+			</f:for>
+		</ul>
+	</f:if>
+</f:section>
+
+

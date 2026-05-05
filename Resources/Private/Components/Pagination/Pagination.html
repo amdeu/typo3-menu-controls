@@ -1,0 +1,44 @@
+
+<f:argument name="class" type="string" optional="1" default=""/>
+<f:argument name="block" type="string" optional="1" default="pagination"/>
+<f:argument name="pagination" type="Amdeu\MenuControls\Dto\Pagination"/>
+
+
+<nav aria-label="Pagination">
+	<ul class="{block} {class}">
+		<f:render section="Item" arguments="{item:pagination.previousItem, ariaLabel:'Previous page', block:block}" />
+		<f:render section="Item" arguments="{item:pagination.firstItem, ariaLabel:'Page {pagination.firstItem.label}', block:block}" />
+		<f:if condition="{pagination.hasSeparatorBefore}">
+			<li class="{block}__item {block}__separator" aria-hidden="true">{pagination.separatorLabel}</li>
+		</f:if>
+		<f:for each="{pagination.windowItems}" as="item" iteration="i">
+			<f:render section="Item" arguments="{item:item, ariaLabel:'Page {item.label}', block:block}" />
+		</f:for>
+		<f:if condition="{pagination.hasSeparatorAfter}">
+			<li class="{block}__item {block}__separator" aria-hidden="true">{pagination.separatorLabel}</li>
+		</f:if>
+		<f:render section="Item" arguments="{item:pagination.lastItem, ariaLabel:'Page {pagination.lastItem.label}', block:block}" />
+		<f:render section="Item" arguments="{item:pagination.nextItem, ariaLabel:'Next page', block:block}" />
+	</ul>
+</nav>
+
+<f:section name="Item">
+	<f:if condition="{item}">
+		<li class="{block}__item">
+			<f:if condition="{item.active}">
+				<f:then>
+					<div class="{block}__link --current">{item.label}</div>
+				</f:then>
+				<f:else>
+					<a href="{item.url}"
+					   aria-label="{ariaLabel}"
+					   class="{block}__link">
+						{item.label -> f:format.raw()}
+					</a>
+				</f:else>
+			</f:if>
+		</li>
+	</f:if>
+</f:section>
+
+

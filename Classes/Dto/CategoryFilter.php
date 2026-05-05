@@ -1,6 +1,6 @@
 <?php
 
-namespace UBOS\MenuControls\Dto;
+namespace Amdeu\MenuControls\Dto;
 
 /**
  * Data Transfer Object for a category filter.

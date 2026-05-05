@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace UBOS\MenuControls\Builder;
+namespace Amdeu\MenuControls\Builder;
 
 use Symfony\Component\DependencyInjection\Attribute\Autoconfigure;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
-use UBOS\MenuControls\Domain\Repository\CategoryRepository;
-use UBOS\MenuControls\Domain\Repository\MenuDemandRepositoryInterface;
-use UBOS\MenuControls\Dto\CategoryFilter;
-use UBOS\MenuControls\Dto\CategoryFilterItem;
-use UBOS\MenuControls\Dto\CategoryItemConfig;
-use UBOS\MenuControls\Dto\MenuDemand;
+use Amdeu\MenuControls\Domain\Repository\CategoryRepository;
+use Amdeu\MenuControls\Domain\Repository\MenuDemandRepositoryInterface;
+use Amdeu\MenuControls\Dto\CategoryFilter;
+use Amdeu\MenuControls\Dto\CategoryFilterItem;
+use Amdeu\MenuControls\Dto\CategoryItemConfig;
+use Amdeu\MenuControls\Dto\MenuDemand;
 
 /**
  * Builder for CategoryFilter DTOs.
@@ -102,14 +102,6 @@ class CategoryFilterBuilder
     protected string $potentialGroupKey = '0';
 
     /**
-     * Pre-fetched records for in-memory potential checking.
-     * When set, avoids additional DB queries entirely.
-     *
-     * @var array<array|object>|null
-     */
-    protected ?array $potentialRecords = null;
-
-    /**
      * Category record field to use as the display label.
      */
     protected string $labelField = 'title';
@@ -187,41 +179,24 @@ class CategoryFilterBuilder
     }
 
     /**
-     * Enables DB-based potential checking (one query per filter item).
+     * Enables potential count checking (one query per filter item).
      * The demand is cloned per item; the active UIDs for the given group key
-     * are replaced before querying.
-     *
-     * For small record sets, prefer withPotentialRecords() to avoid N+1 queries.
+     * are replaced before querying. The result count is stored on each
+     * CategoryFilterItem as $potentialCount — null when not configured,
+     * 0 when selecting the item would yield no results.
      *
      * @param string $groupKey Key within MenuDemand::$categoryGroups to override
      */
-    public function withPotentialRepository(
+    public function withCheckPotential(
+		bool $checkPotential,
         MenuDemandRepositoryInterface $repository,
         MenuDemand $demand,
-        string $groupKey = '0',
+        string $groupKey,
     ): self {
-        $this->potentialRepository = $repository;
+		$this->checkPotential = $checkPotential;
+		$this->potentialRepository = $repository;
         $this->potentialDemand = $demand;
         $this->potentialGroupKey = $groupKey;
-        $this->checkPotential = true;
-        return $this;
-    }
-
-    /**
-     * Enables in-memory potential checking against a pre-fetched record set.
-     * No additional DB queries are made — potential is checked by scanning
-     * the provided records for each category UID.
-     *
-     * Records must expose categories either as:
-     *   - an array under a 'categories' key (raw DB rows with resolved MM)
-     *   - via a getCategories() method returning objects with getUid()
-     *
-     * @param array<array|object> $records
-     */
-    public function withPotentialRecords(array $records): self
-    {
-        $this->potentialRecords = $records;
-        $this->checkPotential = true;
         return $this;
     }
 
@@ -448,9 +423,9 @@ class CategoryFilterBuilder
             active: $isActive && $this->activeUids === $uid,
         );
 
-        $hasNoPotential = $this->checkPotential
-            ? $this->wouldYieldNoResults($newUids)
-            : false;
+        $potentialCount = $this->checkPotential
+            ? $this->getPotentialCount($newUids)
+            : null;
 
         return new CategoryFilterItem(
             label: $label,
@@ -458,7 +433,7 @@ class CategoryFilterBuilder
             fragmentUrl: $this->fragmentUrl($newUids),
             closeItem: $closeItem,
             active: $isActive,
-            hasNoPotential: $hasNoPotential,
+            potentialCount: $potentialCount,
             activeChildren: $activeChildren,
             exclusiveItem: $exclusiveItem,
         );
@@ -519,50 +494,19 @@ class CategoryFilterBuilder
     // -------------------------------------------------------------------------
 
     /**
-     * Returns true when applying the given UID list would yield no results,
-     * meaning this filter state has no potential and the item should be marked accordingly.
-     * Uses in-memory checking when potentialRecords are set, otherwise queries the DB.
+     * Returns the number of records that would match if the given UID list
+     * were applied as the active filter state, or null if potential checking
+     * is not configured. A count of 0 means selecting this item yields no results.
      */
-    protected function wouldYieldNoResults(string $newUids): bool
+    protected function getPotentialCount(string $newUids): ?int
     {
-        if ($newUids === '') {
-            return false;
+        if ($newUids === '' || $this->potentialRepository === null || $this->potentialDemand === null) {
+            return null;
         }
-        if ($this->potentialRecords !== null) {
-            return $this->checkPotentialInMemory($newUids);
-        }
-        if ($this->potentialRepository !== null && $this->potentialDemand !== null) {
-            $demand = clone $this->potentialDemand;
-            $demand->categoryGroups[$this->potentialGroupKey]['uids'] = $newUids;
-            $demand->limit = 1;
-            return empty($this->potentialRepository->findByMenuDemand($demand, true));
-        }
-        return false;
-    }
-
-    /**
-     * Checks potential by scanning pre-fetched records in memory.
-     * Returns true (no potential) when no record contains any of the given category UIDs.
-     *
-     * Supports records exposing categories as:
-     *   - array with 'uid' entries (raw DB rows with resolved MM relations)
-     *   - objects with getCategories() returning an ObjectStorage of objects with getUid()
-     */
-    protected function checkPotentialInMemory(string $newUids): bool
-    {
-        $uids = GeneralUtility::intExplode(',', $newUids, true);
-        foreach ($this->potentialRecords as $record) {
-            $categories = is_array($record)
-                ? ($record['categories'] ?? [])
-                : (method_exists($record, 'getCategories') ? $record->getCategories()->toArray() : []);
-            foreach ($categories as $cat) {
-                $catUid = is_array($cat) ? (int)$cat['uid'] : (int)$cat->getUid();
-                if (in_array($catUid, $uids, true)) {
-                    return false;
-                }
-            }
-        }
-        return true;
+        $demand = clone $this->potentialDemand;
+        $demand->categoryGroups[$this->potentialGroupKey]['uids'] = $newUids;
+        $demand->limit = null;
+        return count($this->potentialRepository->findByMenuDemand($demand, true));
     }
 
     // -------------------------------------------------------------------------

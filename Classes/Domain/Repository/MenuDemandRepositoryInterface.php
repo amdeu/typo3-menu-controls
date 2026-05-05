@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace UBOS\MenuControls\Domain\Repository;
+namespace Amdeu\MenuControls\Domain\Repository;
 
-use UBOS\MenuControls\Dto\MenuDemand;
+use Amdeu\MenuControls\Dto\MenuDemand;
 
 /**
  * Interface for repositories that support filtering by MenuDemand objects.

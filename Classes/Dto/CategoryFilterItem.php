@@ -1,6 +1,6 @@
 <?php
 
-namespace UBOS\MenuControls\Dto;
+namespace Amdeu\MenuControls\Dto;
 
 /**
  * Data Transfer Object for a single category filter item.
@@ -31,8 +31,10 @@ class CategoryFilterItem
      * @param bool $disabled Whether this item is a non-selectable structural element
      *   (e.g. a collapsible group header). Disabled items have no URL.
      *
-     * @param bool $hasNoPotential Whether selecting this item would yield zero results
-     *   given the current demand. Only populated when checkPotential is enabled.
+     * @param int|null $potentialCount Number of records that would match if this item
+     *   were selected given the current demand. Null when potential checking is not
+     *   configured. 0 means selecting this item yields no results — use to hide or
+     *   disable the item in templates. Any positive value can be displayed as a count tag.
      *
      * @param int[] $activeChildren UIDs of child categories that are currently active.
      *
@@ -48,17 +50,13 @@ class CategoryFilterItem
         public ?CategoryFilterItem $closeItem = null,
         public bool                $active = false,
         public bool                $disabled = false,
-        public bool                $hasNoPotential = false,
+        public ?int                $potentialCount = null,
         public array               $activeChildren = [],
         public ?CategoryFilterItem $exclusiveItem = null,
     ) {}
 
-    /**
-     * Whether this item has any active children.
-     * Convenience for templates to avoid checking activeChildren !== [].
-     */
-    public function hasActiveChildren(): bool
-    {
-        return $this->activeChildren !== [];
-    }
+	public function hasNoPotential(): bool
+	{
+		return $this->potentialCount === 0;
+	}
 }

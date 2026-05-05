@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace UBOS\MenuControls\Dto;
+namespace Amdeu\MenuControls\Dto;
 
 /**
  * Configuration for a single category item within a CategoryFilter.

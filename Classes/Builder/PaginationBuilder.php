@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace UBOS\MenuControls\Builder;
+namespace Amdeu\MenuControls\Builder;
 
 use Symfony\Component\DependencyInjection\Attribute\Autoconfigure;
 use TYPO3\CMS\Core\Page\PageRenderer;
 use TYPO3\CMS\Core\Pagination\ArrayPaginator;
 use TYPO3\CMS\Core\Pagination\SlidingWindowPagination;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
-use UBOS\MenuControls\Dto\Pagination;
-use UBOS\MenuControls\Dto\PaginationItem;
+use Amdeu\MenuControls\Dto\Pagination;
+use Amdeu\MenuControls\Dto\PaginationItem;
 
 /**
  * Builder for Pagination DTOs.

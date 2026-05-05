@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace UBOS\MenuControls\Domain\Repository;
+namespace Amdeu\MenuControls\Domain\Repository;
 
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Extbase\Persistence\Generic\Mapper\DataMapper;
 use TYPO3\CMS\Extbase\Persistence\Generic\Qom\ConstraintInterface;
 use TYPO3\CMS\Extbase\Persistence\QueryInterface;
-use UBOS\MenuControls\Dto\MenuDemand;
+use Amdeu\MenuControls\Dto\MenuDemand;
 
 /**
  * Provides a complete implementation of findByMenuDemand() for any Extbase repository.
@@ -46,6 +46,26 @@ trait FindByMenuDemandRepositoryTrait
     {
         return GeneralUtility::makeInstance(DataMapper::class)->map($this->objectType, $rows);
     }
+
+	/**
+	 * Maps raw DB rows to Record objects using RecordFactory.
+	 * Use in combination with findByMenuDemand($demand, true):
+	 *
+	 *   $records = $this->mapToRecords(
+	 *       $this->findByMenuDemand($demand, true)
+	 *   );
+	 */
+	public function mapToRecords(array $rows): array
+	{
+		$tableName = GeneralUtility::makeInstance(DataMapper::class)
+			->getDataMap($this->objectType)
+			->getTableName();
+		$recordFactory = GeneralUtility::makeInstance(RecordFactory::class);
+		return array_map(
+			fn(array $row) => $recordFactory->createResolvedRecordFromDatabaseRow($tableName, $row),
+			$rows
+		);
+	}
 
     /**
      * Hook for adding repository-specific constraints to a MenuDemand query.

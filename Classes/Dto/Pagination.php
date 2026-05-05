@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace UBOS\MenuControls\Dto;
+namespace Amdeu\MenuControls\Dto;
 
 /**
  * Data Transfer Object for pagination state.

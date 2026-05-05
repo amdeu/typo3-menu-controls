@@ -1,6 +1,6 @@
 <?php
 
-namespace UBOS\MenuControls\Domain\Repository;
+namespace Amdeu\MenuControls\Domain\Repository;
 
 use Symfony\Component\DependencyInjection\Attribute\Autoconfigure;
 use TYPO3\CMS\Extbase\Persistence\Generic\QueryResult;

@@ -2,7 +2,7 @@
 
 $EM_CONF[$_EXTKEY] = [
 	'title' => 'Menu Controls',
-	'description' => 'Helpers for building extbase menus',
+	'description' => 'Powerful page menu plugin + helpers for building extbase menus for any record type',
 	'category' => 'fe',
 	'author' => 'Amadeus Kiener',
 	'author_email' => '',

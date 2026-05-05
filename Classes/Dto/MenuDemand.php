@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace UBOS\MenuControls\Dto;
+namespace Amdeu\MenuControls\Dto;
 
 /**
  * Data Transfer Object for menu filtering criteria.
@@ -64,9 +64,6 @@ class MenuDemand
 
     /**
      * Creates a MenuDemand from a raw array, typically from FlexForm plugin settings.
-     *
-     * Keys map directly to constructor parameters. Unknown keys are ignored.
-     * The 'categoryGroups' key replaces the old 'categories' key.
      */
     public static function createFromArray(array $demand): self
     {
