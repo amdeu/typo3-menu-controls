@@ -2,6 +2,8 @@
 
 namespace Amdeu\MenuControls\Domain\Model;
 
+use TYPO3\CMS\Extbase\DomainObject\AbstractEntity;
+
 /**
  * Minimal Extbase model for 'pages' records.
  * Used only to satisfy the Extbase repository requirement.

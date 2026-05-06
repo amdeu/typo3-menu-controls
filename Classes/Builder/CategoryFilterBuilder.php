@@ -54,6 +54,9 @@ class CategoryFilterBuilder
      * @param string                              $labelField            Category field to use as display label
      * @param string                              $labelFieldFallback    Fallback label field
      * @param string                              $resetLabel            Label for the reset item; empty string suppresses it
+     * @param string                              $orderField            DB field to order filter items by at every level;
+     *                                                                   empty = config array order for roots, 'sorting' for children
+     * @param string                              $orderDirection        'asc' or 'desc'
      */
     public function build(
         array                          $configs,
@@ -68,6 +71,8 @@ class CategoryFilterBuilder
         string                         $labelField = 'title',
         string                         $labelFieldFallback = 'title',
         string                         $resetLabel = 'Reset',
+        string                         $orderField = '',
+        string                         $orderDirection = 'asc',
     ): CategoryFilter {
 
         $context = new CategoryFilterBuildContext(
@@ -81,17 +86,25 @@ class CategoryFilterBuilder
             potentialGroupKey: $potentialGroupKey,
             labelField: $labelField,
             labelFieldFallback: $labelFieldFallback,
+            orderField: $orderField,
+            orderDirection: $orderDirection,
         );
 
         $uids = implode(',', array_map(fn(CategoryItemConfig $c) => $c->uid, $configs));
-        $rootRecords = $this->categoryRepository->findByUidList($uids, true);
-        $rootRecordsByUid = array_column($rootRecords, null, 'uid');
-        $rootSiblings = array_values($rootRecordsByUid);
+        $configsByUid = array_combine(array_map(fn($c) => $c->uid, $configs), $configs);
+        $rootRecords = $this->categoryRepository->findByUidList(
+            $uids,
+            true,
+            $orderField,
+            $orderDirection,
+            $orderField === '', // orderByList when no orderField — preserves config array order
+        );
+        $rootSiblings = array_values($rootRecords);
 
         $filterItems = [];
-        foreach ($configs as $config) {
-            $category = $rootRecordsByUid[$config->uid] ?? null;
-            if ($category === null) continue;
+        foreach ($rootRecords as $category) {
+            $config = $configsByUid[$category['uid']] ?? null;
+            if ($config === null) continue;
 
             $filterItems[] = $config->depth > 0
                 ? $this->buildTree(
@@ -110,7 +123,7 @@ class CategoryFilterBuilder
                     siblingExclusive: !$multiSelect || $config->siblingExclusiveLevels !== 0,
                     activeSiblings: array_values(array_filter(
                         array_column($rootSiblings, 'uid'),
-                        fn($uid) => $uid !== $config->uid && $this->isActive($uid, $activeUids)
+                        fn($uid) => $uid !== $category['uid'] && $this->isActive($uid, $activeUids)
                     )),
                 );
         }
@@ -172,7 +185,12 @@ class CategoryFilterBuilder
             );
         }
 
-        $subCategories = $this->categoryRepository->findByParent($category['uid'], true);
+        $subCategories = $this->categoryRepository->findByParent(
+            $category['uid'],
+            true,
+            $context->orderField,
+            $context->orderDirection,
+        );
 
         $activeChildren = array_values(array_filter(
             array_column($subCategories, 'uid'),

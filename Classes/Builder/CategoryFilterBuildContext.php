@@ -9,7 +9,7 @@ use Amdeu\MenuControls\Dto\MenuDemand;
 
 /**
  * Internal value object carrying CategoryFilterBuilder::build() parameters
- * through tree recursion.
+ * through tree recursion. Not part of the public API.
  */
 readonly class CategoryFilterBuildContext
 {
@@ -24,5 +24,7 @@ readonly class CategoryFilterBuildContext
         public string                         $potentialGroupKey,
         public string                         $labelField,
         public string                         $labelFieldFallback,
+        public string                         $orderField,
+        public string                         $orderDirection,
     ) {}
 }

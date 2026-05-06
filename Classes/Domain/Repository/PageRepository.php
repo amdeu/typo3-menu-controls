@@ -64,7 +64,7 @@ class PageRepository extends Repository implements MenuDemandRepositoryInterface
         }
 
         // Exclude the current page from results
-        if ($currentPageId = (int)($settings['currentPageId'] ?? 0)) {
+        if ($settings['excludeCurrentPage'] && $currentPageId = (int)($settings['currentPageId'] ?? 0)) {
             $constraints[] = $query->logicalNot($query->equals('uid', $currentPageId));
         }
 

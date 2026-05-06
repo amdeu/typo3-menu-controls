@@ -1,6 +1,6 @@
 <?php
 
-namespace UBOS\MenuControls\Domain\Model;
+namespace Amdeu\MenuControls\Domain\Model;
 
 use TYPO3\CMS\Extbase\Persistence\ObjectStorage;
 use TYPO3\CMS\Extbase\DomainObject\AbstractEntity;

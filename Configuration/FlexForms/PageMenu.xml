@@ -5,19 +5,9 @@
                 <sheetTitle>Record selection</sheetTitle>
                 <type>array</type>
                 <el>
-                    <settings.demand.parents>
-                        <label>Parents</label>
-                        <config>
-                            <type>group</type>
-                            <internal_type>db</internal_type>
-                            <allowed>pages</allowed>
-                            <size>3</size>
-                            <maxitems>50</maxitems>
-                            <minitems>0</minitems>
-                        </config>
-                    </settings.demand.parents>
                     <settings.demand.records>
                         <label>Records</label>
+                        <description>Display selected pages</description>
                         <config>
                             <type>group</type>
                             <internal_type>db</internal_type>
@@ -27,6 +17,18 @@
                             <minitems>0</minitems>
                         </config>
                     </settings.demand.records>
+                    <settings.demand.parents>
+                        <label>Parents</label>
+                        <description>Display subpages of selected pages</description>
+                        <config>
+                            <type>group</type>
+                            <internal_type>db</internal_type>
+                            <allowed>pages</allowed>
+                            <size>3</size>
+                            <maxitems>50</maxitems>
+                            <minitems>0</minitems>
+                        </config>
+                    </settings.demand.parents>
                 </el>
             </ROOT>
         </selection>
@@ -40,7 +42,7 @@
                         <config>
                             <type>select</type>
                             <renderType>selectCheckBox</renderType>
-                            <itemsProcFunc>UBOS\Puck\UserFunc\FormEngine\ContentItemsProcFunc->doktypes
+                            <itemsProcFunc>Amdeu\MenuControls\UserFunc\FormEngine\ItemsProcFunc->doktypes
                             </itemsProcFunc>
                             <items>
                                 <numIndex index="0">
@@ -59,6 +61,14 @@
                             <default>1</default>
                         </config>
                     </settings.demand.additionalSettings.navHide>
+                    <settings.demand.additionalSettings.excludeCurrentPage>
+                        <label>Exclude current page</label>
+                        <config>
+                            <type>check</type>
+                            <renderType>checkboxToggle</renderType>
+                            <default>1</default>
+                        </config>
+                    </settings.demand.additionalSettings.excludeCurrentPage>
                     <settings.demand.limit>
                         <label>Maximum number of records displayed</label>
                         <config>
@@ -171,7 +181,7 @@
                 <type>array</type>
                 <el>
                     <settings.pagination.enabled>
-                        <label>Pagination</label>
+                        <label>Enable pagination</label>
                         <config>
                             <type>check</type>
                             <renderType>checkboxToggle</renderType>
@@ -197,7 +207,7 @@
                 <type>array</type>
                 <el>
                     <settings.categoryFilter.enabled>
-                        <label>Show category filter</label>
+                        <label>Enable category filter</label>
                         <config>
                             <type>check</type>
                             <renderType>checkboxToggle</renderType>
@@ -223,6 +233,44 @@
                             <maxitems>100</maxitems>
                         </config>
                     </settings.categoryFilter.treeCategories>
+                    <settings.categoryFilter.orderField>
+                        <label>Order by</label>
+                        <config>
+                            <type>select</type>
+                            <renderType>selectSingle</renderType>
+                            <items>
+                                <numIndex index="0">
+                                    <numIndex index="0">List sorting</numIndex>
+                                    <numIndex index="1">sorting</numIndex>
+                                </numIndex>
+                                <numIndex index="1">
+                                    <numIndex index="0">Title</numIndex>
+                                    <numIndex index="1">title</numIndex>
+                                </numIndex>
+                                <numIndex index="2">
+                                    <numIndex index="0">Parent</numIndex>
+                                    <numIndex index="1">parent</numIndex>
+                                </numIndex>
+                            </items>
+                        </config>
+                    </settings.categoryFilter.orderField>
+                    <settings.categoryFilter.orderDirection>
+                        <label>Order direction</label>
+                        <config>
+                            <type>select</type>
+                            <renderType>selectSingle</renderType>
+                            <items>
+                                <numIndex index="0">
+                                    <numIndex index="0">Ascending</numIndex>
+                                    <numIndex index="1">asc</numIndex>
+                                </numIndex>
+                                <numIndex index="1">
+                                    <numIndex index="0">Descending</numIndex>
+                                    <numIndex index="1">desc</numIndex>
+                                </numIndex>
+                            </items>
+                        </config>
+                    </settings.categoryFilter.orderDirection>
                     <settings.categoryFilter.multiSelect>
                         <label>Enable multi-select</label>
                         <config>

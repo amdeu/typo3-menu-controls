@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Amdeu\MenuControls\Domain\Repository;
 
+use TYPO3\CMS\Core\Domain\RecordFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Extbase\Persistence\Generic\Mapper\DataMapper;
 use TYPO3\CMS\Extbase\Persistence\Generic\Qom\ConstraintInterface;
@@ -22,8 +23,7 @@ use Amdeu\MenuControls\Dto\MenuDemand;
  *       protected function getAdditionalMenuDemandConstraints(QueryInterface $query, MenuDemand $demand): array
  *       {
  *           return [
- *               $query->equals('hidden', 0),
- *               $query->greaterThan('datetime', $demand->additionalSettings['cutoffDate'] ?? 0),
+     *               $query->greaterThan('datetime', $demand->additionalSettings['cutoffDate'] ?? 0),
  *           ];
  *       }
  *   }
@@ -144,18 +144,7 @@ trait FindByMenuDemandRepositoryTrait
             $query->setOffset($demand->offset);
         }
 
-        // Ordering — secondary sort by 'sorting' only when the primary field differs,
-        // and only when the record type is likely to have a 'sorting' field.
-        // Override getAdditionalMenuDemandConstraints() to control ordering instead
-        // if your record type does not have a 'sorting' field.
-        $orderDirection = strtolower($demand->orderDirection) === 'desc'
-            ? QueryInterface::ORDER_DESCENDING
-            : QueryInterface::ORDER_ASCENDING;
-        $orderings = [$demand->orderField => $orderDirection];
-        if ($demand->orderField !== 'sorting') {
-            $orderings['sorting'] = $orderDirection;
-        }
-        $query->setOrderings($orderings);
+        $query->setOrderings($this->getMenuDemandOrderings($demand));
 
         // Fallback constraint when nothing else is set — avoids an empty WHERE clause
         if (!$constraints) {
@@ -174,6 +163,22 @@ trait FindByMenuDemandRepositoryTrait
         }
 
         return $records;
+    }
+
+    /**
+     * Returns the orderings array for a MenuDemand query.
+     * Override to customise ordering for record types with different field names.
+     */
+    protected function getMenuDemandOrderings(MenuDemand $demand): array
+    {
+        $direction = strtolower($demand->orderDirection) === 'desc'
+            ? QueryInterface::ORDER_DESCENDING
+            : QueryInterface::ORDER_ASCENDING;
+        $orderings = [$demand->orderField => $direction];
+        if ($demand->orderField !== 'sorting') {
+            $orderings['sorting'] = QueryInterface::ORDER_ASCENDING;
+        }
+        return $orderings;
     }
 
     /**
