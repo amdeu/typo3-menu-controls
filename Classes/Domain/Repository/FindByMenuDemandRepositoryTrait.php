@@ -174,7 +174,8 @@ trait FindByMenuDemandRepositoryTrait
         $direction = strtolower($demand->orderDirection) === 'desc'
             ? QueryInterface::ORDER_DESCENDING
             : QueryInterface::ORDER_ASCENDING;
-        $orderings = [$demand->orderField => $direction];
+		// strtolower for legacy camelCase columns like "lastUpdated", will be interpreted as "last_updated" otherwise and throw an error
+        $orderings = [strtolower($demand->orderField) => $direction];
         if ($demand->orderField !== 'sorting') {
             $orderings['sorting'] = QueryInterface::ORDER_ASCENDING;
         }

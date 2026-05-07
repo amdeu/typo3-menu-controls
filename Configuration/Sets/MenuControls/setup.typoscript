@@ -1,0 +1,40 @@
+plugin.tx_menucontrols {
+    settings {
+        demand {
+            parents =
+            records =
+            limit =
+            offset = 0
+            orderField = sorting
+            orderDirection = asc
+            orderByRecordsProperty = 0
+            categoryGroups {
+                main {
+                    uids =
+                    conjunction = or
+                }
+            }
+            additionalSettings {
+            }
+        }
+        pagination {
+            enabled = 0
+            itemsPerPage = 12
+            maximumLinks = 3
+        }
+        categoryFilter {
+            enabled = 0
+            categories =
+            treeCategories =
+            treeDepth = 1
+            treeDisabledLevels = 1
+            treeSiblingExclusiveLevels = 0
+            buildTreeBelowEnabledInactive = 0
+            multiSelect = 1
+            checkPotential = 0
+            resetLabel = All
+            orderField = sorting
+            orderDirection = asc
+        }
+    }
+}

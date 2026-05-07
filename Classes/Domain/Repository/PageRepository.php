@@ -13,7 +13,7 @@ use Amdeu\MenuControls\Dto\MenuDemand;
 /**
  * Repository for 'pages' records.
  *
- * Used by the reference PageMenuController. Implements MenuDemandRepositoryInterface
+ * Used by the reference MenuController. Implements MenuDemandRepositoryInterface
  * via FindByMenuDemandRepositoryTrait, adding page-specific constraints on top
  * of the generic demand handling.
  *
