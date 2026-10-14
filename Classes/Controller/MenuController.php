@@ -100,7 +100,7 @@ class MenuController extends ActionController
     protected function buildDemandMenuWithControls(
         MenuDemandRepositoryInterface $repository,
         string                        $actionName,
-        array                         $filterConfigs = null,
+        ?array                        $filterConfigs = null,
     ): array {
         $filterConfigs ??= ['main' => $this->getFilterConfig()];
 		$demand      = $this->buildDemand($filterConfigs);
@@ -200,7 +200,7 @@ class MenuController extends ActionController
      * @param ?array $config Filter config — defaults to $this->getFilterConfig()
      * @return array<int, CategoryItemConfig>
      */
-    protected function buildCategoryItemConfigs(array $config = null): array
+    protected function buildCategoryItemConfigs(?array $config = null): array
     {
         $config ??= $this->getFilterConfig();
         $categoryUids     = GeneralUtility::intExplode(',', $config['categories'] ?? '', true);
